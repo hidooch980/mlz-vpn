@@ -1,0 +1,42 @@
+name: Sync Signed 5-Min Feed & Iran Rules
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Download Latest Iran sing-box .srs Rule-Sets
+        run: |
+          mkdir -p rules/build
+          curl -fsSL -o rules/build/geosite-ir.srs https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-ir.srs || true
+          curl -fsSL -o rules/build/geoip-ir.srs https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-ir.srs || true
+
+      - name: Generate Signed feed.v1.json
+        working-directory: feeds
+        env:
+          MLZ_FEED_PRIVKEY: ${{ secrets.MLZ_FEED_PRIVKEY }}
+        run: |
+          SOURCES="https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Sub1.txt,https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/mix"
+          go run ./cmd/feedgen/main.go -sources "$SOURCES" -out ./feed.v1.json
+
+      - name: Commit & Push Updated Feed
+        run: |
+          git config user.name "mlz-vpn-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add feeds/feed.v1.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(feed): sync 5-minute signed feed"
+            git push
+          fi

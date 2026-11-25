@@ -1,0 +1,58 @@
+# مستندات فنی و معماری پیاده‌سازی MLZ VPN
+
+این سند مشخصات فنی دقیق پروژه **MLZ VPN** را بر اساس تصمیمات نهایی تاییدشده مستند می‌کند:
+- **پلتفرم‌های هدف فعلی:** Windows (10/11 x64/arm64) و Android (API 24+)
+- **معماری هسته:** Flutter UI + Go Engine (`mlz-engine`) + ترکیبی **`sing-box`** (هسته اصلی) + **`Xray-core`** (هسته مکمل) + **پکیج کامل سایدکارهای مدولار (All-In)**
+- **ساختار UI تاییدشده:** ۲ تب اصلی (`خانه` و `تنظیمات`)، دکمه دایره‌ای درخشان اتصال، مستطیل IP با قابلیت کلیک برای تست زنده، دو انتخابگر کشویی هم‌راستا (کشور اتوماتیک/دستی + حالت اتصال بر اساس هسته‌ها/اتوماتیک)، و نوار پینگ + ارسال + دریافت
+- **تغذیه کانفیگ:** فید مرکزی امضاشده (`Ed25519`) با به‌روزرسانی ۵ دقیقه‌ای روی GitHub/CDN Mirror + بذر آفلاین داخلی
+- **مدل دسترسی ویندوز:** درخواست دسترسی ادمین (UAC) فقط هنگام اتصال در حالت `TUN` (بدون سرویس پس‌زمینه دائمی؛ حالت `Proxy` بدون ادمین کار می‌کند)
+- **مجوز:** MIT
+
+---
+
+## ۱. نگاشت انتخاب‌های کاربری در UI به موتور Go (`mlz-engine`)
+
+### الف) انتخاب کشور (اتوماتیک یا دستی)
+- `country: "auto"` -> استخر تمام کشورهای فید ۵ دقیقه‌ای رتبه‌بندی شده و بهترین گره انتخاب می‌شود.
+- `country: "DE" | "NL" | "FI" | ...` -> گره‌های همان کشور فیلتر می‌شوند و در صورت افت کلی تمام سرورهای آن کشور، به کاربر اطلاع داده شده یا در حالت خودکار جایگزین می‌شود.
+
+### ب) انتخاب حالت اتصال بر اساس هسته‌ها و حالت اتوماتیک
+| گزینه در کشوی حالت اتصال | رفتار موتور Go (`mlz-engine`) |
+|---|---|
+| `auto` (اتوماتیک هوشمند) | مدیریت ۱۰۰٪ خودکار بین `sing-box` و `Xray-core` و تغییر خودکار به سایدکارها هنگام تشخیص DPI |
+| `singbox_fast` (سرعت و گیم) | اولویت با پروتکل‌های پرسرعت `sing-box` (`Hysteria2`, `TUIC v5`, `WireGuard`, `SS-2022`, `Reality`) |
+| `xray_antidpi` (ضدفیلتر Xray) | اجبار مسیر از طریق `Xray-core` زنجیره‌شده به `sing-box` با `XHTTP/SplitHTTP` و `TLS Fragment + Noise` |
+| `sidecar_modern` (تونل‌های مقاوم) | استفاده از `AmneziaWG`, `usque (MASQUE)`, `NaiveProxy`, `Cloak`, `Mieru`, `Juicity` |
+| `sidecar_emergency` (شبکه‌های مقاوم) | فعال‌سازی `Lyrebird (obfs4/Snowflake/WebTunnel)`, `Arti (Tor)`, `Psiphon`, `Lantern`, `Brook` |
+| `dpi_desync` (عبور از DPI سخت) | فعال‌سازی `ByeDPI`/`SpoofDPI` (و در ویندوز ادمین `GoodbyeDPI`/`udp2raw`) یا تونل DNS اضطراری `dnstt` |
+| `battery_saver` (صرفه‌جویی باتری) | اجرای تک‌هسته کم‌مصرف `sing-box`، حذف تست‌های پس‌زمینه غیرضروری و افزایش بازه همگام‌سازی به ۱۵ دقیقه |
+
+### ج) تست با کلیک روی مستطیل IP (`Click-to-Test IP`)
+وقتی کاربر روی مستطیل IP کلیک می‌کند، متد `RunIPHealthCheck()` در `mlz-engine` اجرا می‌شود:
+1. دریافت IP عمومی خروجی از طریق تونل فعال (با endpointهای متعدد بدون کش مثل `api.ipify.org` / `ifconfig.co` / Cloudflare trace).
+2. اندازه‌گیری مجدد `Real Delay` واقعی روی مسیر فعال (`generate_204`).
+3. تست هم‌زمان DNS leak (تایید عدم ارسال درخواست‌های غیرایرانی به DNS اپراتور) و تست دسترسی مستقیم `.ir`.
+4. بازگرداندن نتیجه لحظه‌ای به مستطیل IP و به‌روزرسانی نوار پینگ.
+
+---
+
+## ۲. مدل اجرا و چرخه حیات در Windows و Android
+
+### الف) Windows: مدل Dual-Mode (بدون سرویس دائمی)
+1. **رابط کاربری (`mlz-vpn.exe`):** همیشه با دسترسی کاربر عادی اجرا می‌شود.
+2. **حالت Proxy سبک (بدون ادمین):** `mlz-engine.exe --mode=proxy` بدون UAC اجرا شده و `HKCU Internet Settings` را امن مدیریت می‌کند.
+3. **حالت TUN امن (درخواست ادمین هنگام اتصال):** هنگام کلیک روی دایره اتصال، `ShellExecuteExW("runas")` فرآیند `mlz-engine.exe --mode=tun --pipe=\\.\pipe\mlz-<id> --token=<secret>` را بالا می‌آورد و با قطع اتصال/خروج، `Wintun`، Routeها و Rule موقت فایروال را پاکسازی کرده و بسته می‌شود.
+
+### ب) Android: مدل `VpnService` + `gomobile` + `nativeLibraryDir`
+1. `MlzVpnService` (`VpnService`) فایل دیسکریپتور `tunFd` و `SocketProtector` (`VpnService.protect`) را به `mlz-core.aar` می‌دهد.
+2. تمام هسته‌های Go (`sing-box`, `Xray-core`, `AmneziaWG`, `SpoofDPI`, `usque`, `Lyrebird`, `dnstt`, `Cloak`, `Psiphon`, `Brook`, `Trojan-Go`, `Lantern`, `Mieru`, `Juicity`, `Gost`, `Chisel`) داخل `mlz-core.aar` کامپایل می‌شوند.
+3. سایدکارهای C/Rust (`ByeDPI`, `Arti`, `NaiveProxy`, `wstunnel`, `kcptun`, `SIP003`) در `jniLibs/<abi>/libmlz_<name>.so` پکیج شده و از مسیر استاندارد `nativeLibraryDir` اجرا می‌شوند.
+
+---
+
+## ۳. مشخصات فنی موتورهای داخلی (`engine/`)
+- `pkg/model`: مدل‌های داده یکپارچه برای کل اپلیکیشن و IPC.
+- `pkg/parser`: پارس خودکار URIها و اشتراک‌های استاندارد (`vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `tuic://`, `ssconf://`).
+- `pkg/subscription`: راستی‌آزمایی امضای `Ed25519` روی فید ۵ دقیقه‌ای (`feed.v1.json`) و مدیریت بازه‌های باتری.
+- `pkg/routing`: تولید قوانین Split-DNS و مسیریابی مستقیم `.ir` + `.srs` برای `sing-box`.
+- `pkg/probe`, `pkg/diagnostics`, `pkg/cores`, `pkg/lan`, `pkg/ipc`: در گام‌های بعدی کدنویسی تکمیل می‌شوند.

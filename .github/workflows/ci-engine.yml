@@ -1,0 +1,39 @@
+name: CI Engine & App Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  go-engine-test:
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Run Go Engine Tests
+        working-directory: engine
+        run: go test -v ./...
+      - name: Run Go Feed Generator Tests
+        working-directory: feeds
+        run: go test -v ./...
+
+  flutter-app-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - name: Analyze & Test Flutter App
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test -r expanded

@@ -1,0 +1,53 @@
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Secrets & Signing Keys (NEVER commit)
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+key.properties
+.env
+.env.*
+
+# Go Engine & Compiled Libraries
+engine/bin/
+engine/build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.aar
+*.jar
+*.xcframework/
+!app/android/app/src/main/jniLibs/.gitkeep
+
+# Downloaded Tier-2 / Tier-3 Sidecar Binaries & Rule-Sets Cache
+cores/cache/
+rules/build/
+*.srs.tmp
+
+# Flutter / Dart
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/build/
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+app/ios/Flutter/ephemeral/
+app/android/.gradle/
+app/android/local.properties
+app/android/app/debug/
+app/android/app/release/
+*.apk
+*.aab
+*.msix
+*.zip
