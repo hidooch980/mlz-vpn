@@ -77,14 +77,18 @@ func main() {
 
 	privB64 := strings.TrimSpace(os.Getenv("MLZ_FEED_PRIVKEY"))
 	var privKey ed25519.PrivateKey
-	if privB64 != "" {
-		raw, err := base64.StdEncoding.DecodeString(privB64)
-		if err != nil || len(raw) != ed25519.PrivateKeySize {
-			fmt.Fprintf(os.Stderr, "invalid MLZ_FEED_PRIVKEY\n")
-			os.Exit(1)
-		}
-		privKey = ed25519.PrivateKey(raw)
+	if privB64 == "" {
+		// Never publish an unsigned feed: clients reject it (fail closed) and a
+		// missing CI secret must surface as a failed job, not a dead feed.
+		fmt.Fprintf(os.Stderr, "MLZ_FEED_PRIVKEY is required\n")
+		os.Exit(1)
 	}
+	raw, err := base64.StdEncoding.DecodeString(privB64)
+	if err != nil || len(raw) != ed25519.PrivateKeySize {
+		fmt.Fprintf(os.Stderr, "invalid MLZ_FEED_PRIVKEY\n")
+		os.Exit(1)
+	}
+	privKey = ed25519.PrivateKey(raw)
 
 	var allNodes []model.Node
 	seen := make(map[string]struct{})
@@ -116,6 +120,13 @@ func main() {
 				break
 			}
 		}
+	}
+
+	if len(allNodes) < 3 {
+		// Keep the previously published signed feed instead of replacing a
+		// working feed with an empty one when upstream sources are unreachable.
+		fmt.Fprintf(os.Stderr, "only %d nodes scraped; refusing to publish\n", len(allNodes))
+		os.Exit(1)
 	}
 
 	final := BuildAndSignFeed(allNodes, privKey, time.Now().UTC())

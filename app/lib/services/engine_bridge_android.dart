@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/vpn_models.dart';
 import 'engine_bridge.dart';
@@ -9,10 +8,16 @@ import 'engine_bridge.dart';
 class AndroidEngineBridge implements EngineBridge {
   static const _channel = MethodChannel('com.mlzvpn.app/engine');
 
-  Future<Map<String, dynamic>> _invokeJson(String method, [Map<String, dynamic>? args]) async {
+  Future<Map<String, dynamic>> _invokeJson(String method,
+      [Map<String, dynamic>? args]) async {
     final raw = await _channel.invokeMethod<String>(method, args);
     if (raw == null || raw.isEmpty) return <String, dynamic>{};
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final decoded = jsonDecode(raw) as Map<String, dynamic>;
+    final error = decoded['error'];
+    if (error is String && error.isNotEmpty) {
+      throw Exception(error);
+    }
+    return decoded;
   }
 
   @override
@@ -48,8 +53,10 @@ class AndroidEngineBridge implements EngineBridge {
   }
 
   @override
-  Future<LanShareModel> toggleLanShare({required bool enabled, required bool usePin}) async {
-    final res = await _invokeJson('toggleLan', {'enabled': enabled, 'use_pin': usePin});
+  Future<LanShareModel> toggleLanShare(
+      {required bool enabled, required bool usePin}) async {
+    final res =
+        await _invokeJson('toggleLan', {'enabled': enabled, 'use_pin': usePin});
     return LanShareModel.fromJson(res);
   }
 
@@ -64,7 +71,9 @@ class AndroidEngineBridge implements EngineBridge {
     return AppUpdateInfo(
       updateAvailable: true,
       version: (m['version'] as String?) ?? '',
-      changelogFA: ((m['changelog_fa'] as List<dynamic>?) ?? const []).map((e) => e.toString()).toList(),
+      changelogFA: ((m['changelog_fa'] as List<dynamic>?) ?? const [])
+          .map((e) => e.toString())
+          .toList(),
       downloadUrl: (asset['url'] as String?) ?? '',
       sha256: (asset['sha256'] as String?) ?? '',
     );
@@ -72,8 +81,13 @@ class AndroidEngineBridge implements EngineBridge {
 
   @override
   Future<void> downloadAndInstallUpdate(AppUpdateInfo info) async {
-    if (info.downloadUrl.isEmpty) return;
-    await launchUrl(Uri.parse(info.downloadUrl), mode: LaunchMode.externalApplication);
+    if (info.downloadUrl.isEmpty || info.sha256.isEmpty) {
+      throw Exception('اطلاعات به‌روزرسانی ناقص است؛ دوباره بررسی کنید.');
+    }
+    await _invokeJson('downloadUpdate', {
+      'url': info.downloadUrl,
+      'sha256': info.sha256,
+    });
   }
 
   @override

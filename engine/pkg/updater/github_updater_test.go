@@ -2,7 +2,10 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -11,6 +14,60 @@ import (
 	"path/filepath"
 	"testing"
 )
+
+func TestIsNewerVersion(t *testing.T) {
+	cases := []struct {
+		remote, current string
+		want            bool
+	}{
+		{"1.2.0", "1.0.0", true},
+		{"v1.0.1", "1.0.0", true},
+		{"1.0.0", "1.0.0", false},
+		{"1.0", "1.0.0", false},
+		{"1.0.0", "1.0", false},
+		{"2.0", "10.0", false},
+		{"1.10.0", "1.9.9", true},
+		{"1.0.0-beta", "1.0.0", false},
+		{"", "1.0.0", false},
+	}
+	for _, tc := range cases {
+		if got := IsNewerVersion(tc.remote, tc.current); got != tc.want {
+			t.Fatalf("IsNewerVersion(%q,%q)=%v want %v", tc.remote, tc.current, got, tc.want)
+		}
+	}
+}
+
+func TestVerifyManifestSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &VersionManifest{
+		Version:     "1.2.0",
+		BuildNumber: 200,
+		ChangelogFA: []string{"تست"},
+	}
+	canonical, err := CanonicalManifestBytes(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, canonical))
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+	if err := VerifyManifestSignature(pubB64, m); err != nil {
+		t.Fatalf("valid signature rejected: %v", err)
+	}
+
+	tampered := *m
+	tampered.Version = "1.2.1"
+	if err := VerifyManifestSignature(pubB64, &tampered); err == nil {
+		t.Fatal("tampered manifest accepted")
+	}
+	unsigned := *m
+	unsigned.Signature = ""
+	if err := VerifyManifestSignature(pubB64, &unsigned); err == nil {
+		t.Fatal("unsigned manifest accepted")
+	}
+}
 
 func TestCheckForUpdateAndVerifyDownload(t *testing.T) {
 	payload := []byte("mlz-vpn-binary-test-payload")
@@ -40,7 +97,7 @@ func TestCheckForUpdateAndVerifyDownload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := CheckForUpdate(context.Background(), 100, []string{srv.URL + "/version.json"}, 0)
+	res, err := CheckForUpdateVersion(context.Background(), 100, "1.0.0", []string{srv.URL + "/version.json"}, 0)
 	if err != nil {
 		t.Fatalf("CheckForUpdate error: %v", err)
 	}

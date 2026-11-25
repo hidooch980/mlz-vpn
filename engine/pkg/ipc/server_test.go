@@ -22,6 +22,7 @@ func (noopRunner) StartXray(_ context.Context, _ []byte) error    { return nil }
 func (noopRunner) StopXray() error                                { return nil }
 
 func TestIPCAuthAndEndpoints(t *testing.T) {
+	t.Setenv("MLZ_ALLOW_LOOPBACK_UPDATE", "1")
 	orch := orchestrator.New(orchestrator.Config{CacheDir: t.TempDir()}, noopRunner{})
 	srv := NewServer(orch, "secret-token-123", nil)
 

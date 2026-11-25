@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:material_ui/material_ui.dart';
 import '../models/vpn_models.dart';
 import '../theme/mlz_theme.dart';
@@ -155,6 +157,9 @@ class DualSelectorRow extends StatelessWidget {
 
   void _openEngineDrawer(BuildContext context) {
     final c = Theme.of(context).extension<MlzColors>()!;
+    final modes = EngineModeOption.values
+        .where((mode) => !Platform.isAndroid || mode.supportedOnAndroid)
+        .toList(growable: false);
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: c.canvas,
@@ -179,10 +184,10 @@ class DualSelectorRow extends StatelessWidget {
                   Flexible(
                     child: ListView.separated(
                       shrinkWrap: true,
-                      itemCount: EngineModeOption.values.length,
+                      itemCount: modes.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (_, idx) {
-                        final mode = EngineModeOption.values[idx];
+                        final mode = modes[idx];
                         final active = mode == selectedMode;
                         return SpatialGlassCard(
                           onTap: () {

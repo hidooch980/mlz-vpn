@@ -31,7 +31,7 @@ enum TunnelModeOption {
 }
 
 enum EngineModeOption {
-  auto('auto', 'اتوماتیک هوشمند', 'مدیریت خودکار تمام هسته‌ها (پیشنهادی)'),
+  auto('auto', 'اتوماتیک هوشمند', 'انتخاب هوشمند بهترین سرور و مسیر (پیشنهادی)'),
   singboxFast('singbox_fast', 'سرعت و گیمینگ', 'هسته sing-box: Hysteria2 / TUIC / WireGuard'),
   xrayAntiDpi('xray_antidpi', 'ضدفیلتر Xray', 'هسته Xray-core: XHTTP + TLS Fragment'),
   sidecarModern('sidecar_modern', 'تونل‌های مقاوم مدرن', 'AmneziaWG • usque MASQUE • Naive • Cloak'),
@@ -43,6 +43,13 @@ enum EngineModeOption {
   final String titleFA;
   final String subtitleFA;
   const EngineModeOption(this.wireValue, this.titleFA, this.subtitleFA);
+
+  /// Android ships only the sing-box/libbox dataplane; Xray and process
+  /// sidecars are desktop-only and must not be offered as working modes.
+  bool get supportedOnAndroid =>
+      this == EngineModeOption.auto ||
+      this == EngineModeOption.singboxFast ||
+      this == EngineModeOption.batterySaver;
 }
 
 class CountryChoice {

@@ -5,11 +5,18 @@ package mobile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/model"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/orchestrator"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/subscription"
+	"github.com/mlz-vpn/mlz-vpn/engine/pkg/updater"
 )
 
 // SocketProtector is implemented in Kotlin via Android VpnService.protect(fd)
@@ -18,35 +25,31 @@ type SocketProtector interface {
 	Protect(fd int32) bool
 }
 
-type androidRunner struct {
-	tunFD     int32
-	protector SocketProtector
-}
-
-func (a *androidRunner) StartSingBox(_ context.Context, _ []byte) error { return nil }
-func (a *androidRunner) StopSingBox() error                             { return nil }
-func (a *androidRunner) StartXray(_ context.Context, _ []byte) error    { return nil }
-func (a *androidRunner) StopXray() error                                { return nil }
-
 var (
-	mu   sync.Mutex
-	orch *orchestrator.Orchestrator
+	mu           sync.Mutex
+	orch         *orchestrator.Orchestrator
+	bgCancel     context.CancelFunc
+	activeRunner orchestrator.CoreRunner
 )
 
-// Init initializes the shared Android Go engine inside MlzVpnService.
-func Init(cacheDir, ruleSetDir, nativeLibDir string, tunFD int32, protector SocketProtector) {
+// Init initializes the shared Android Go engine inside MlzVpnService and
+// returns a JSON status string (including an error when initialization fails).
+func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, protector SocketProtector) string {
 	mu.Lock()
-	defer mu.Unlock()
-	runner := &androidRunner{tunFD: tunFD, protector: protector}
+	runner := newAndroidRunner(cacheDir, tunFD, protector, networkJSON)
+	activeRunner = runner
 	orch = orchestrator.New(orchestrator.Config{
-		CurrentBuild:   100,
-		CacheDir:       cacheDir,
-		RuleSetDir:     ruleSetDir,
-		AndroidLibDir:  nativeLibDir,
-		LocalMixedPort: 10809,
-		LANSharePort:   10808,
+		CurrentBuild:    101,
+		CurrentVersion:  "1.0.1",
+		UpdatePublicKey: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
+		CacheDir:        cacheDir,
+		RuleSetDir:      ruleSetDir,
+		AndroidLibDir:   nativeLibDir,
+		LocalMixedPort:  10809,
+		LANSharePort:    10808,
 		FeedSource: subscription.FeedSourceConfig{
 			PublicKeyBase64: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
+			EmbeddedSeeds:   subscription.EmbeddedSeeds(),
 			FeedURLs: []string{
 				"https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
 				"https://raw.githubusercontent.com/hidooch980/mlz-vpn/main/feeds/feed.v1.json",
@@ -56,6 +59,34 @@ func Init(cacheDir, ruleSetDir, nativeLibDir string, tunFD int32, protector Sock
 			"https://github.com/hidooch980/mlz-vpn/releases/latest/download/version.json",
 		},
 	}, runner)
+	if bgCancel != nil {
+		bgCancel()
+	}
+	bgCtx, cancel := context.WithCancel(context.Background())
+	bgCancel = cancel
+	o := orch
+	mu.Unlock()
+	go o.StartBackgroundSync(bgCtx)
+	return GetStatusJSON()
+}
+
+// UpdatePlatformNetwork refreshes the Android interface snapshot after Wi-Fi,
+// cellular, or hotspot changes. Kotlin calls this from a ConnectivityManager
+// callback so the running tunnel can switch its underlying network without a
+// full reconnect. It is a no-op on non-Android builds.
+func UpdatePlatformNetwork(networkJSON string) string {
+	mu.Lock()
+	runner := activeRunner
+	mu.Unlock()
+	if runner == nil {
+		return `{"ok":false,"error":"engine not initialized"}`
+	}
+	updater, ok := runner.(interface{ updateNetworkJSON(string) })
+	if !ok {
+		return `{"ok":false,"error":"network update is not supported on this platform"}`
+	}
+	updater.updateNetworkJSON(networkJSON)
+	return `{"ok":true}`
 }
 
 // Connect starts the smart connection pipeline and returns JSON status.
@@ -125,8 +156,86 @@ func ToggleLANSharing(enabled, usePIN bool) string {
 	if o == nil {
 		return `{"error":"engine not initialized"}`
 	}
-	info, _ := o.SetLANSharing(context.Background(), enabled, usePIN)
+	info, err := o.SetLANSharing(context.Background(), enabled, usePIN)
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return string(b)
+	}
 	b, _ := json.Marshal(info)
+	return string(b)
+}
+
+// CheckAppUpdate checks GitHub Releases and returns JSON for the Flutter UI.
+func CheckAppUpdate() string {
+	mu.Lock()
+	o := orch
+	mu.Unlock()
+	if o == nil {
+		return `{"error":"engine not initialized"}`
+	}
+	res, err := o.CheckAppUpdate(context.Background())
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return string(b)
+	}
+	b, _ := json.Marshal(res)
+	return string(b)
+}
+
+// CheckAppUpdateStandalone checks GitHub Releases without requiring a live
+// tunnel, so the Android UI can offer updates before connecting.
+func CheckAppUpdateStandalone(currentBuild int32, currentVersion string) string {
+	res, err := updater.CheckForUpdateVersionSigned(context.Background(), int(currentBuild), currentVersion, []string{
+		"https://github.com/hidooch980/mlz-vpn/releases/latest/download/version.json",
+		"https://raw.githubusercontent.com/hidooch980/mlz-vpn/main/version.json",
+	}, 0, "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=")
+	if err != nil {
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		return string(b)
+	}
+	b, _ := json.Marshal(res)
+	return string(b)
+}
+
+// DownloadAppUpdate downloads an APK asset from a signed release manifest into
+// the app cache and verifies its SHA-256 before the UI asks Android to install it.
+// cacheDir must be the same directory exposed by the FileProvider (cache/updates).
+func DownloadAppUpdate(cacheDir, assetURL, sha256 string) string {
+	if strings.TrimSpace(cacheDir) == "" {
+		return updateErrorJSON("مسیر کش برنامه برای دریافت به‌روزرسانی در دسترس نیست.")
+	}
+	u, err := url.Parse(strings.TrimSpace(assetURL))
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return updateErrorJSON("نشانی دانلود به‌روزرسانی باید HTTPS باشد.")
+	}
+	if strings.TrimSpace(sha256) == "" {
+		return updateErrorJSON("چک‌سام به‌روزرسانی در مانیفست وجود ندارد.")
+	}
+	dir := filepath.Join(cacheDir, "updates")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return updateErrorJSON(fmt.Sprintf("ساخت پوشه به‌روزرسانی ناموفق بود: %v", err))
+	}
+	dest := filepath.Join(dir, "mlz-vpn-update.apk")
+	_ = os.Remove(dest)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := updater.DownloadAndVerify(ctx, updater.AssetInfo{URL: u.String(), SHA256: sha256}, dest, 0); err != nil {
+		return updateErrorJSON(fmt.Sprintf("دریافت به‌روزرسانی ناموفق بود: %v", err))
+	}
+	info, err := os.Stat(dest)
+	if err != nil || info.Size() <= 0 {
+		return updateErrorJSON("فایل به‌روزرسانی پس از دانلود معتبر نیست.")
+	}
+	b, _ := json.Marshal(map[string]any{
+		"path":   dest,
+		"bytes":  info.Size(),
+		"sha256": strings.ToLower(strings.TrimSpace(sha256)),
+	})
+	return string(b)
+}
+
+func updateErrorJSON(message string) string {
+	b, _ := json.Marshal(map[string]string{"error": message})
 	return string(b)
 }
 

@@ -159,8 +159,8 @@ func RunDiagnostics(ctx context.Context, prober Prober) (model.DiagnosticsReport
 		ID:          "dns",
 		TitleFA:     "سلامت DNS و جلوگیری از فیلتر نام دامنه",
 		Status:      statusIf(!poisoned, "fixed"),
-		DetailFA:    ternary(poisoned, "DNS مسموم شناسایی و به‌طور خودکار به DoH تغییر یافت.", "DNS سالم است و با Split-DNS محافظت می‌شود."),
-		AutoApplied: poisoned,
+		DetailFA:    ternary(poisoned, "DNS اپراتور مسموم است؛ در اتصال بعدی هسته به‌صورت خودکار از DoH داخلی MLZ استفاده می‌کند.", "DNS سالم است و با Split-DNS محافظت می‌شود."),
+		AutoApplied: false,
 	})
 
 	// Step 4: Local proxy/port conflict
@@ -169,8 +169,8 @@ func RunDiagnostics(ctx context.Context, prober Prober) (model.DiagnosticsReport
 		ID:          "conflict",
 		TitleFA:     "بررسی تداخل پورت و پراکسی دیگر",
 		Status:      statusIf(!conflict, "fixed"),
-		DetailFA:    ternary(conflict, "پراکسی خارجی فعال بود؛ پورت اختصاصی پویا جایگزین شد.", "تداخلی در پورت‌های سیستم وجود ندارد."),
-		AutoApplied: conflict,
+		DetailFA:    ternary(conflict, "پراکسی/متغیر محیطی خارجی شناسایی شد؛ MLZ از پورت محلی اختصاصی خود استفاده می‌کند و تنظیمات شما را تغییر نمی‌دهد.", "تداخلی در پورت‌های سیستم وجود ندارد."),
+		AutoApplied: false,
 	})
 
 	// Step 5: UDP throttling / DPI check
@@ -185,8 +185,8 @@ func RunDiagnostics(ctx context.Context, prober Prober) (model.DiagnosticsReport
 		ID:          "dpi",
 		TitleFA:     "تشخیص محدودیت UDP و فیلترینگ DPI اپراتور",
 		Status:      statusIf(udpOK, "fixed"),
-		DetailFA:    ternary(udpOK, "پروتکل‌های پرسرعت UDP و TCP در دسترس هستند.", "محدودیت UDP تشخیص داده شد؛ مسیر به حالت مقاوم TCP/Xray منتقل شد."),
-		AutoApplied: !udpOK,
+		DetailFA:    ternary(udpOK, "پروتکل‌های پرسرعت UDP و TCP در دسترس هستند.", "محدودیت UDP تشخیص داده شد؛ در صورت اتصال، مسیر مقاوم TCP/Xray به‌طور خودکار انتخاب می‌شود."),
+		AutoApplied: false,
 	})
 
 	// Step 6: Iran .ir direct check
@@ -201,7 +201,7 @@ func RunDiagnostics(ctx context.Context, prober Prober) (model.DiagnosticsReport
 		TitleFA:     "آماده‌باش هسته‌های پشتیبان (All-In)",
 		Status:      "ok",
 		DetailFA:    "sing-box، Xray-core و سایدکارهای اضطراری آماده تغییر مسیر آنی هستند.",
-		AutoApplied: action.EnableAntiDPIChain,
+		AutoApplied: false,
 	})
 
 	summary := "همه بخش‌های شبکه سالم هستند و بهترین مسیر آماده اتصال است."

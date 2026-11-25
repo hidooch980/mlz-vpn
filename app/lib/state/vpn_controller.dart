@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/vpn_models.dart';
@@ -25,8 +26,12 @@ class MlzAppState {
   final IpTestResultModel? lastIpTest;
   final DiagnosticsReportModel? diagnosticsReport;
   final bool diagnosticsRunning;
+  final bool lanBusy;
+  final bool updateChecking;
+  final bool updateDownloading;
   final LanShareModel lanShare;
   final AppUpdateInfo? availableUpdate;
+  final String appVersion;
   final String? errorMessageFA;
 
   const MlzAppState({
@@ -34,7 +39,11 @@ class MlzAppState {
     this.themeMode = ThemeMode.system,
     this.tunnelMode = TunnelModeOption.tun,
     this.engineMode = EngineModeOption.auto,
-    this.country = const CountryChoice(code: 'auto', nameFA: 'اتوماتیک (بهترین کشور)', flag: '🌐', hintPing: 'خودکار'),
+    this.country = const CountryChoice(
+        code: 'auto',
+        nameFA: 'اتوماتیک (بهترین کشور)',
+        flag: '🌐',
+        hintPing: 'خودکار'),
     this.batterySaver = true,
     this.appLockEnabled = false,
     this.isUnlocked = true,
@@ -48,6 +57,9 @@ class MlzAppState {
     this.lastIpTest,
     this.diagnosticsReport,
     this.diagnosticsRunning = false,
+    this.lanBusy = false,
+    this.updateChecking = false,
+    this.updateDownloading = false,
     this.lanShare = const LanShareModel(
       enabled: false,
       primaryIp: '192.168.137.1',
@@ -57,8 +69,11 @@ class MlzAppState {
       firewallManaged: false,
     ),
     this.availableUpdate,
+    this.appVersion = '1.0.0',
     this.errorMessageFA,
   });
+
+  static const Object _unset = Object();
 
   MlzAppState copyWith({
     VpnConnectionState? connState,
@@ -76,12 +91,16 @@ class MlzAppState {
     int? downloadTotalBytes,
     int? connectedSeconds,
     bool? ipTesting,
-    IpTestResultModel? lastIpTest,
-    DiagnosticsReportModel? diagnosticsReport,
+    Object? lastIpTest = _unset,
+    Object? diagnosticsReport = _unset,
     bool? diagnosticsRunning,
+    bool? lanBusy,
+    bool? updateChecking,
+    bool? updateDownloading,
     LanShareModel? lanShare,
-    AppUpdateInfo? availableUpdate,
-    String? errorMessageFA,
+    Object? availableUpdate = _unset,
+    String? appVersion,
+    Object? errorMessageFA = _unset,
   }) {
     return MlzAppState(
       connState: connState ?? this.connState,
@@ -99,17 +118,30 @@ class MlzAppState {
       downloadTotalBytes: downloadTotalBytes ?? this.downloadTotalBytes,
       connectedSeconds: connectedSeconds ?? this.connectedSeconds,
       ipTesting: ipTesting ?? this.ipTesting,
-      lastIpTest: lastIpTest ?? this.lastIpTest,
-      diagnosticsReport: diagnosticsReport ?? this.diagnosticsReport,
+      lastIpTest: identical(lastIpTest, _unset)
+          ? this.lastIpTest
+          : lastIpTest as IpTestResultModel?,
+      diagnosticsReport: identical(diagnosticsReport, _unset)
+          ? this.diagnosticsReport
+          : diagnosticsReport as DiagnosticsReportModel?,
       diagnosticsRunning: diagnosticsRunning ?? this.diagnosticsRunning,
+      lanBusy: lanBusy ?? this.lanBusy,
+      updateChecking: updateChecking ?? this.updateChecking,
+      updateDownloading: updateDownloading ?? this.updateDownloading,
       lanShare: lanShare ?? this.lanShare,
-      availableUpdate: availableUpdate ?? this.availableUpdate,
-      errorMessageFA: errorMessageFA,
+      availableUpdate: identical(availableUpdate, _unset)
+          ? this.availableUpdate
+          : availableUpdate as AppUpdateInfo?,
+      appVersion: appVersion ?? this.appVersion,
+      errorMessageFA: identical(errorMessageFA, _unset)
+          ? this.errorMessageFA
+          : errorMessageFA as String?,
     );
   }
 }
 
-final vpnControllerProvider = StateNotifierProvider<VpnController, MlzAppState>((ref) {
+final vpnControllerProvider =
+    StateNotifierProvider<VpnController, MlzAppState>((ref) {
   return VpnController(EngineBridge.create());
 });
 
@@ -127,6 +159,11 @@ class VpnController extends StateNotifier<MlzAppState> {
     final appLock = prefs.getBool('app_lock') ?? false;
     final battery = prefs.getBool('battery_saver') ?? true;
     final tunnelIdx = prefs.getInt('tunnel_mode') ?? 0;
+    String version = '1.0.0';
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (info.version.isNotEmpty) version = info.version;
+    } catch (_) {}
 
     state = state.copyWith(
       themeMode: ThemeMode.values[themeIndex.clamp(0, 2)],
@@ -134,7 +171,19 @@ class VpnController extends StateNotifier<MlzAppState> {
       isUnlocked: !appLock,
       batterySaver: battery,
       tunnelMode: TunnelModeOption.values[tunnelIdx.clamp(0, 1)],
+      appVersion: version,
     );
+    unawaited(_checkUpdateOnStartup());
+  }
+
+  Future<void> _checkUpdateOnStartup() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final last = prefs.getInt('last_update_check_ms') ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - last < const Duration(hours: 1).inMilliseconds) return;
+    } catch (_) {}
+    await checkForUpdates(silent: true);
   }
 
   Future<void> toggleConnection() async {
@@ -145,7 +194,8 @@ class VpnController extends StateNotifier<MlzAppState> {
       return;
     }
 
-    state = state.copyWith(connState: VpnConnectionState.connecting, errorMessageFA: null);
+    state = state.copyWith(
+        connState: VpnConnectionState.connecting, errorMessageFA: null);
     try {
       final snap = await _bridge.connect(
         tunnelMode: state.tunnelMode,
@@ -174,6 +224,7 @@ class VpnController extends StateNotifier<MlzAppState> {
         connectedSeconds: 0,
         uploadBps: 0,
         downloadBps: 0,
+        errorMessageFA: null,
       );
     }
   }
@@ -196,17 +247,27 @@ class VpnController extends StateNotifier<MlzAppState> {
     final stats = (snap['stats'] as Map<String, dynamic>?) ?? const {};
     final lanRaw = snap['lan'] as Map<String, dynamic>?;
     final ipRaw = snap['last_ip_test'] as Map<String, dynamic>?;
+    final serverError = (snap['error_message_fa'] as String?)?.trim();
+    final keepError = st == VpnConnectionState.error &&
+        (serverError == null || serverError.isEmpty);
 
     state = state.copyWith(
       connState: st,
-      realDelayMs: (stats['real_delay_ms'] as num?)?.toInt() ?? state.realDelayMs,
+      realDelayMs:
+          (stats['real_delay_ms'] as num?)?.toInt() ?? state.realDelayMs,
       uploadBps: (stats['upload_bps'] as num?)?.toInt() ?? 0,
       downloadBps: (stats['download_bps'] as num?)?.toInt() ?? 0,
-      uploadTotalBytes: (stats['upload_total_bytes'] as num?)?.toInt() ?? state.uploadTotalBytes,
-      downloadTotalBytes: (stats['download_total_bytes'] as num?)?.toInt() ?? state.downloadTotalBytes,
-      lanShare: lanRaw != null ? LanShareModel.fromJson(lanRaw) : state.lanShare,
-      lastIpTest: ipRaw != null ? IpTestResultModel.fromJson(ipRaw) : state.lastIpTest,
-      errorMessageFA: snap['error_message_fa'] as String?,
+      uploadTotalBytes: (stats['upload_total_bytes'] as num?)?.toInt() ??
+          state.uploadTotalBytes,
+      downloadTotalBytes: (stats['download_total_bytes'] as num?)?.toInt() ??
+          state.downloadTotalBytes,
+      lanShare:
+          lanRaw != null ? LanShareModel.fromJson(lanRaw) : state.lanShare,
+      lastIpTest:
+          ipRaw != null ? IpTestResultModel.fromJson(ipRaw) : state.lastIpTest,
+      errorMessageFA: keepError
+          ? state.errorMessageFA
+          : (serverError == null || serverError.isEmpty ? null : serverError),
     );
   }
 
@@ -224,7 +285,8 @@ class VpnController extends StateNotifier<MlzAppState> {
     } catch (e) {
       state = state.copyWith(
         ipTesting: false,
-        errorMessageFA: 'تست آی‌پی ناموفق بود: ${e.toString().replaceFirst('Exception: ', '')}',
+        errorMessageFA:
+            'تست آی‌پی ناموفق بود: ${e.toString().replaceFirst('Exception: ', '')}',
       );
     }
   }
@@ -271,38 +333,94 @@ class VpnController extends StateNotifier<MlzAppState> {
 
   void markUnlocked() => state = state.copyWith(isUnlocked: true);
 
+  void clearError() => state = state.copyWith(errorMessageFA: null);
+
   Future<void> runDiagnostics() async {
-    state = state.copyWith(diagnosticsRunning: true);
+    if (state.diagnosticsRunning) return;
+    state = state.copyWith(
+      diagnosticsRunning: true,
+      diagnosticsReport: null,
+      errorMessageFA: null,
+    );
     try {
       final report = await _bridge.runDiagnostics();
-      state = state.copyWith(diagnosticsRunning: false, diagnosticsReport: report);
-    } catch (_) {
-      state = state.copyWith(diagnosticsRunning: false);
+      state = state.copyWith(
+        diagnosticsRunning: false,
+        diagnosticsReport: report,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        diagnosticsRunning: false,
+        errorMessageFA: 'عیب‌یابی ناموفق بود: ${_cleanError(e)}',
+      );
     }
   }
 
-  Future<void> toggleLanSharing({required bool enabled, required bool usePin}) async {
+  Future<void> toggleLanSharing(
+      {required bool enabled, required bool usePin}) async {
+    if (state.lanBusy) return;
+    state = state.copyWith(lanBusy: true, errorMessageFA: null);
     try {
-      final info = await _bridge.toggleLanShare(enabled: enabled, usePin: usePin);
-      state = state.copyWith(lanShare: info);
-    } catch (_) {}
+      final info =
+          await _bridge.toggleLanShare(enabled: enabled, usePin: usePin);
+      state = state.copyWith(lanBusy: false, lanShare: info);
+    } catch (e) {
+      state = state.copyWith(
+        lanBusy: false,
+        errorMessageFA: 'تغییر اشتراک LAN ناموفق بود: ${_cleanError(e)}',
+      );
+    }
   }
 
-  Future<void> checkForUpdates() async {
+  Future<void> checkForUpdates({bool silent = false}) async {
+    if (state.updateChecking) return;
+    state = silent
+        ? state.copyWith(updateChecking: true)
+        : state.copyWith(updateChecking: true, errorMessageFA: null);
     try {
       final info = await _bridge.checkUpdate();
-      state = state.copyWith(availableUpdate: info);
-    } catch (_) {}
+      state = state.copyWith(
+        updateChecking: false,
+        availableUpdate: info,
+      );
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(
+          'last_update_check_ms',
+          DateTime.now().millisecondsSinceEpoch,
+        );
+      } catch (_) {}
+    } catch (e) {
+      state = silent
+          ? state.copyWith(updateChecking: false)
+          : state.copyWith(
+              updateChecking: false,
+              errorMessageFA:
+                  'بررسی به‌روزرسانی ناموفق بود: ${_cleanError(e)}',
+            );
+    }
   }
+
+  void dismissUpdate() {
+    state = state.copyWith(availableUpdate: null);
+  }
+
+  String _cleanError(Object error) => error
+      .toString()
+      .replaceFirst('Exception: ', '')
+      .replaceFirst('PlatformException(', '');
 
   Future<void> downloadAndInstallUpdate() async {
     final upd = state.availableUpdate;
-    if (upd == null || !upd.updateAvailable) return;
+    if (upd == null || !upd.updateAvailable || state.updateDownloading) return;
+    state = state.copyWith(updateDownloading: true, errorMessageFA: null);
     try {
       await _bridge.downloadAndInstallUpdate(upd);
+      state = state.copyWith(updateDownloading: false);
     } catch (e) {
       state = state.copyWith(
-        errorMessageFA: 'خطا در دریافت به‌روزرسانی: ${e.toString().replaceFirst('Exception: ', '')}',
+        updateDownloading: false,
+        errorMessageFA: 'خطا در دریافت به‌روزرسانی: ${_cleanError(e)}',
       );
     }
   }

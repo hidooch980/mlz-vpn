@@ -8,6 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +25,8 @@ type FeedSourceConfig struct {
 	PublicKeyBase64 string
 	FeedURLs        []string
 	EmbeddedSeeds   []model.FeedNode
+	// StatePath persists the last accepted signed sequence across restarts.
+	StatePath string
 }
 
 // Fetcher maintains cached verified nodes and refreshes every 5 minutes (15 min in battery saver).
@@ -28,6 +34,7 @@ type Fetcher struct {
 	mu           sync.RWMutex
 	cfg          FeedSourceConfig
 	lastETag     string
+	lastSequence int64
 	lastFetched  time.Time
 	cachedFeed   *model.FeedPayload
 	cachedNodes  []model.Node
@@ -36,10 +43,18 @@ type Fetcher struct {
 
 // NewFetcher constructs a 5-minute signed feed fetcher.
 func NewFetcher(cfg FeedSourceConfig) *Fetcher {
-	return &Fetcher{
+	f := &Fetcher{
 		cfg:          cfg,
 		activeClient: &http.Client{Timeout: 8 * time.Second},
 	}
+	if cfg.StatePath != "" {
+		if raw, err := os.ReadFile(cfg.StatePath); err == nil {
+			if seq, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil && seq > 0 {
+				f.lastSequence = seq
+			}
+		}
+	}
+	return f
 }
 
 // CachedNodes returns currently verified nodes (or embedded seeds before first online sync).
@@ -112,11 +127,15 @@ func (f *Fetcher) SyncIfDue(ctx context.Context, force bool, batterySaver bool, 
 			continue
 		}
 
-		if f.cfg.PublicKeyBase64 != "" {
-			if sigErr := VerifyFeedSignature(f.cfg.PublicKeyBase64, &payload); sigErr != nil {
-				lastErr = sigErr
-				continue
-			}
+		// Fail closed: an unsigned feed is never accepted, even if configuration
+		// accidentally omits the pinned Ed25519 public key.
+		if sigErr := VerifyFeedSignature(f.cfg.PublicKeyBase64, &payload); sigErr != nil {
+			lastErr = sigErr
+			continue
+		}
+		if freshErr := ValidateFeedFreshness(&payload, time.Now()); freshErr != nil {
+			lastErr = freshErr
+			continue
 		}
 
 		nodes := convertFeedNodes(payload.Nodes)
@@ -126,15 +145,36 @@ func (f *Fetcher) SyncIfDue(ctx context.Context, force bool, batterySaver bool, 
 		}
 
 		f.mu.Lock()
+		if f.lastSequence > 0 && payload.Sequence <= f.lastSequence {
+			f.mu.Unlock()
+			lastErr = fmt.Errorf("%w: got %d, have %d", ErrFeedRollback, payload.Sequence, f.lastSequence)
+			continue
+		}
 		f.cachedFeed = &payload
 		f.cachedNodes = nodes
 		f.lastETag = newETag
+		f.lastSequence = payload.Sequence
 		f.lastFetched = time.Now()
+		statePath := f.cfg.StatePath
 		f.mu.Unlock()
+		if statePath != "" {
+			_ = writeSequence(statePath, payload.Sequence)
+		}
 		return true, nil
 	}
 
 	return false, lastErr
+}
+
+func writeSequence(path string, seq int64) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(seq, 10)), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (f *Fetcher) clientForPort(proxyPort int) *http.Client {

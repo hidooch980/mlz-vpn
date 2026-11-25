@@ -6,8 +6,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -46,7 +49,11 @@ func NewServer(orch *orchestrator.Orchestrator, bearerToken string, onShutdown f
 
 	s.httpServer = &http.Server{
 		Handler:           mux,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	return s
 }
@@ -57,6 +64,12 @@ func (s *Server) ListenAndServe(addr string) error {
 	if err != nil {
 		return err
 	}
+	return s.Serve(ln)
+}
+
+// Serve accepts connections on an already-bound listener (used by the
+// single-instance startup path so a bind failure is detected before launch).
+func (s *Server) Serve(ln net.Listener) error {
 	return s.httpServer.Serve(ln)
 }
 
@@ -67,18 +80,24 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.token != "" {
-			hdr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(hdr), []byte(s.token)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if s.token == "" {
+			http.Error(w, "server token not configured", http.StatusServiceUnavailable)
+			return
+		}
+		hdr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(hdr), []byte(s.token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next(w, r)
 	}
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	writeJSON(w, http.StatusOK, s.orch.Snapshot())
 }
 
@@ -93,8 +112,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Country      model.CountryPreference `json:"country"`
 		BatterySaver bool                    `json:"battery_saver"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := s.orch.Connect(r.Context(), orchestrator.ConnectRequest{
@@ -119,6 +137,10 @@ func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTestIP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	res, err := s.orch.TestIPHealth(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -128,6 +150,10 @@ func (s *Server) handleTestIP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	report := s.orch.RunSmartDiagnostics(r.Context())
 	writeJSON(w, http.StatusOK, report)
 }
@@ -141,8 +167,7 @@ func (s *Server) handleLAN(w http.ResponseWriter, r *http.Request) {
 		Enabled bool `json:"enabled"`
 		UsePIN  bool `json:"use_pin"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	info, err := s.orch.SetLANSharing(r.Context(), req.Enabled, req.UsePIN)
@@ -154,6 +179,10 @@ func (s *Server) handleLAN(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	updated, err := s.orch.SyncFeed(r.Context(), true)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"updated": updated, "error": err.Error()})
@@ -163,6 +192,10 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	res, err := s.orch.CheckAppUpdate(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -181,8 +214,11 @@ func (s *Server) handleDownloadUpdate(w http.ResponseWriter, r *http.Request) {
 		SHA256   string `json:"sha256"`
 		FileName string `json:"file_name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !allowedUpdateURL(req.URL) {
+		http.Error(w, "update URL is not allowed", http.StatusBadRequest)
 		return
 	}
 	path, err := s.orch.DownloadAppUpdate(r.Context(), updater.AssetInfo{URL: req.URL, SHA256: req.SHA256}, req.FileName)
@@ -193,7 +229,11 @@ func (s *Server) handleDownloadUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"path": path})
 }
 
-func (s *Server) handleShutdown(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	_ = s.orch.Disconnect()
 	writeJSON(w, http.StatusOK, map[string]bool{"closing": true})
 	if s.shutdownFn != nil {
@@ -202,6 +242,43 @@ func (s *Server) handleShutdown(w http.ResponseWriter, _ *http.Request) {
 			s.shutdownFn()
 		}()
 	}
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(dst); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "request body must contain a single JSON object", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func allowedUpdateURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() && os.Getenv("MLZ_ALLOW_LOOPBACK_UPDATE") == "1" {
+		return true
+	}
+	if strings.ToLower(u.Scheme) != "https" {
+		return false
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+			return false
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

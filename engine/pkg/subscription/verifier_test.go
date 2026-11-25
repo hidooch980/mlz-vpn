@@ -59,3 +59,27 @@ func TestVerifyFeedSignatureAndRefresh(t *testing.T) {
 		t.Fatal("battery saver should wait 15 minutes")
 	}
 }
+
+func TestValidateFeedFreshnessGrace(t *testing.T) {
+	now := time.Date(2026, 11, 25, 21, 0, 0, 0, time.UTC)
+	payload := &model.FeedPayload{GeneratedAt: now.Add(-2 * time.Hour), TTLSeconds: 300}
+	if err := ValidateFeedFreshness(payload, now); err != nil {
+		t.Fatalf("a two-hour scheduler delay must remain usable: %v", err)
+	}
+
+	payload.GeneratedAt = now.Add(-6 * time.Hour)
+	if err := ValidateFeedFreshness(payload, now); err == nil {
+		t.Fatal("expected a six-hour-old feed to be rejected")
+	}
+
+	payload.GeneratedAt = now.Add(20 * time.Minute)
+	if err := ValidateFeedFreshness(payload, now); err == nil {
+		t.Fatal("expected a feed from the future to be rejected")
+	}
+
+	payload.GeneratedAt = now
+	payload.TTLSeconds = int((25 * time.Hour).Seconds())
+	if err := ValidateFeedFreshness(payload, now); err == nil {
+		t.Fatal("expected an excessive TTL to be rejected")
+	}
+}

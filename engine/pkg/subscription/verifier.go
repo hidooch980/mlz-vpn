@@ -17,13 +17,43 @@ const (
 	DefaultRefreshInterval      = 5 * time.Minute
 	BatterySaverRefreshInterval = 15 * time.Minute
 	ExpectedFeedSchema          = "mlz.feed.v1"
+	MaxFeedTTL                  = 24 * time.Hour
+	FeedFutureSkew              = 10 * time.Minute
+	FeedExpiryGrace             = 4 * time.Hour
 )
 
 var (
 	ErrInvalidSchema    = errors.New("unexpected feed schema")
 	ErrInvalidSignature = errors.New("feed Ed25519 signature verification failed")
 	ErrInvalidPublicKey = errors.New("invalid Ed25519 public key")
+	ErrFeedExpired      = errors.New("signed feed is older than its TTL")
+	ErrFeedFromFuture   = errors.New("signed feed generation time is in the future")
+	ErrInvalidTTL       = errors.New("signed feed has an invalid TTL")
+	ErrFeedRollback     = errors.New("signed feed sequence rolled back")
 )
+
+// ValidateFeedFreshness rejects implausible clocks and expired signed payloads.
+// The four-hour grace absorbs GitHub Actions scheduler outages and first-launch
+// delays while still refusing a day-old feed that could be replayed indefinitely.
+func ValidateFeedFreshness(payload *model.FeedPayload, now time.Time) error {
+	if payload == nil {
+		return errors.New("nil feed payload")
+	}
+	if payload.GeneratedAt.IsZero() {
+		return ErrFeedFromFuture
+	}
+	if payload.TTLSeconds <= 0 || time.Duration(payload.TTLSeconds)*time.Second > MaxFeedTTL {
+		return ErrInvalidTTL
+	}
+	if payload.GeneratedAt.After(now.Add(FeedFutureSkew)) {
+		return ErrFeedFromFuture
+	}
+	expires := payload.GeneratedAt.Add(time.Duration(payload.TTLSeconds)*time.Second + FeedExpiryGrace)
+	if now.After(expires) {
+		return ErrFeedExpired
+	}
+	return nil
+}
 
 type canonicalFeed struct {
 	Schema      string           `json:"schema"`

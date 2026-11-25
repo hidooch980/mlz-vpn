@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -23,17 +25,22 @@ type SingBoxBuildOptions struct {
 	ClashAPIPort     int
 	ClashSecret      string
 	RuleSetDir       string
-	UpstreamSocks    string // If non-empty, sing-box chains proxy traffic to Xray or a Sidecar at this 127.0.0.1:port
+	UpstreamSocks    string
 	UpstreamUser     string
 	UpstreamPassword string
 	PrimaryNode      model.Node
 	AutoInterface    bool
+	Android          bool
+	EnableIPv6       bool
 	TUNMTU           int
 }
 
-// BuildSingBoxConfig produces a full sing-box JSON configuration where sing-box owns
-// TUN/Proxy inbounds, Split-DNS, .ir direct routing, LAN sharing, and Clash stats API.
+// BuildSingBoxConfig produces a full sing-box 1.12+ JSON configuration where sing-box
+// owns TUN/Proxy inbounds, Split-DNS, .ir direct routing, LAN sharing, and Clash stats API.
 func BuildSingBoxConfig(opts SingBoxBuildOptions) ([]byte, error) {
+	if runtime.GOOS == "android" {
+		opts.Android = true
+	}
 	if opts.LocalMixedPort == 0 {
 		opts.LocalMixedPort = 10809
 	}
@@ -55,17 +62,28 @@ func BuildSingBoxConfig(opts SingBoxBuildOptions) ([]byte, error) {
 	}
 
 	if opts.TunnelMode == model.TunnelModeTUN {
-		inbounds = append(inbounds, map[string]any{
-			"type":          "tun",
-			"tag":           "tun-in",
-			"interface_name": "mlz0",
-			"address":       []string{"172.19.0.1/30"},
-			"mtu":           opts.TUNMTU,
-			"auto_route":    true,
-			"strict_route":  true,
-			"stack":         "mixed",
-			"sniff":         true,
-		})
+		tun := map[string]any{
+			"type":    "tun",
+			"tag":     "tun-in",
+			"address": []string{"172.19.0.1/30"},
+			"mtu":     opts.TUNMTU,
+			"stack":   "mixed",
+		}
+		if opts.Android {
+			tun["address"] = []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"}
+			tun["auto_route"] = false
+			tun["strict_route"] = false
+			tun["stack"] = "gvisor"
+			tun["dns_mode"] = "hijack"
+		} else {
+			tun["interface_name"] = "mlz0"
+			tun["auto_route"] = true
+			tun["strict_route"] = true
+			if opts.EnableIPv6 {
+				tun["address"] = []string{"172.19.0.1/30", "fdfe:dcba:9876::1/126"}
+			}
+		}
+		inbounds = append(inbounds, tun)
 	}
 
 	if opts.EnableLANShare {
@@ -93,31 +111,32 @@ func BuildSingBoxConfig(opts SingBoxBuildOptions) ([]byte, error) {
 
 	outbounds := []map[string]any{
 		proxyOutbound,
-		{"type": "direct", "tag": "direct"},
-		{"type": "block", "tag": "block"},
-		{"type": "dns", "tag": "dns-out"},
+		{"type": "direct", "tag": "direct", "domain_resolver": "dns-iran-direct"},
 	}
 
-	ruleSets := []map[string]any{
-		{
-			"tag":    "geosite-ir",
-			"type":   "local",
-			"format": "binary",
-			"path":   filepath.ToSlash(filepath.Join(opts.RuleSetDir, "geosite-ir.srs")),
-		},
-		{
-			"tag":    "geoip-ir",
-			"type":   "local",
-			"format": "binary",
-			"path":   filepath.ToSlash(filepath.Join(opts.RuleSetDir, "geoip-ir.srs")),
-		},
+	available := availableRuleSets(opts.RuleSetDir)
+	ruleSets := make([]map[string]any, 0, 2)
+	if available["geosite-ir"] {
+		ruleSets = append(ruleSets, localRuleSet("geosite-ir", opts.RuleSetDir, "geosite-ir.srs"))
+	}
+	if available["geoip-ir"] {
+		ruleSets = append(ruleSets, localRuleSet("geoip-ir", opts.RuleSetDir, "geoip-ir.srs"))
 	}
 
+	dnsConfig := routing.BuildIranSplitDNS(proxyTag)
+	dnsConfig.Rules = filterDNSRules(dnsConfig.Rules, available)
+
+	routeRules := filterRouteRules(routing.BuildIranRouteRules(proxyTag), available)
 	route := map[string]any{
-		"auto_detect_interface": opts.AutoInterface,
-		"final":                 proxyTag,
-		"rule_set":              ruleSets,
-		"rules":                 routing.BuildIranRouteRules(proxyTag),
+		"final":                   proxyTag,
+		"rule_set":                ruleSets,
+		"rules":                   routeRules,
+		"default_domain_resolver": map[string]any{"server": "dns-remote", "strategy": "prefer_ipv4"},
+	}
+	if opts.Android {
+		route["auto_detect_interface"] = false
+	} else {
+		route["auto_detect_interface"] = opts.AutoInterface
 	}
 
 	experimental := map[string]any{}
@@ -125,12 +144,13 @@ func BuildSingBoxConfig(opts SingBoxBuildOptions) ([]byte, error) {
 		experimental["clash_api"] = map[string]any{
 			"external_controller": fmt.Sprintf("127.0.0.1:%d", opts.ClashAPIPort),
 			"secret":              opts.ClashSecret,
+			"default_mode":        "rule",
 		}
 	}
 
 	cfg := map[string]any{
 		"log":          map[string]any{"level": "warn", "timestamp": true},
-		"dns":          routing.BuildIranSplitDNS(proxyTag),
+		"dns":          dnsConfig,
 		"inbounds":     inbounds,
 		"outbounds":    outbounds,
 		"route":        route,
@@ -164,80 +184,310 @@ func buildSingBoxOutbound(tag string, opts SingBoxBuildOptions) (map[string]any,
 		return ob, nil
 	}
 
-	n := opts.PrimaryNode
+	return buildSingBoxNodeOutbound(tag, opts.PrimaryNode)
+}
+
+func buildSingBoxNodeOutbound(tag string, n model.Node) (map[string]any, error) {
 	if n.Address == "" || n.Port == 0 {
 		return nil, fmt.Errorf("missing node server address or port")
 	}
+	p := n.Params
+	ob := map[string]any{
+		"tag":             tag,
+		"server":          n.Address,
+		"server_port":     n.Port,
+		"domain_resolver": "dns-iran-direct",
+	}
 
 	switch strings.ToLower(n.Protocol) {
-	case "hysteria2":
-		ob := map[string]any{
-			"type":        "hysteria2",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"password":    n.Params["password"],
-		}
-		if sni := n.Params["sni"]; sni != "" {
-			ob["tls"] = map[string]any{"enabled": true, "server_name": sni}
-		}
-		return ob, nil
 	case "vless":
-		ob := map[string]any{
-			"type":        "vless",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"uuid":        n.Params["uuid"],
+		if p["uuid"] == "" {
+			return nil, fmt.Errorf("vless node is missing uuid")
 		}
-		if flow := n.Params["flow"]; flow != "" {
+		ob["type"] = "vless"
+		ob["uuid"] = p["uuid"]
+		if flow := p["flow"]; flow != "" {
 			ob["flow"] = flow
 		}
-		if sni := n.Params["sni"]; sni != "" {
-			ob["tls"] = map[string]any{"enabled": true, "server_name": sni}
+		if pe := p["packet_encoding"]; pe != "" {
+			ob["packet_encoding"] = pe
 		}
-		return ob, nil
+		if err := applyTLSAndTransport(ob, n.Protocol, p); err != nil {
+			return nil, err
+		}
 	case "vmess":
-		return map[string]any{
-			"type":        "vmess",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"uuid":        n.Params["uuid"],
-			"security":    "auto",
-		}, nil
+		if p["uuid"] == "" {
+			return nil, fmt.Errorf("vmess node is missing uuid")
+		}
+		ob["type"] = "vmess"
+		ob["uuid"] = p["uuid"]
+		ob["security"] = defaultString(p["security"], "auto")
+		if alter, err := strconv.Atoi(defaultString(p["alterid"], "0")); err == nil && alter > 0 {
+			ob["alter_id"] = alter
+		}
+		if pe := p["packet_encoding"]; pe != "" {
+			ob["packet_encoding"] = pe
+		}
+		if err := applyTLSAndTransport(ob, n.Protocol, p); err != nil {
+			return nil, err
+		}
 	case "trojan":
-		ob := map[string]any{
-			"type":        "trojan",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"password":    n.Params["password"],
+		if p["password"] == "" {
+			return nil, fmt.Errorf("trojan node is missing password")
 		}
-		if sni := n.Params["sni"]; sni != "" {
-			ob["tls"] = map[string]any{"enabled": true, "server_name": sni}
+		ob["type"] = "trojan"
+		ob["password"] = p["password"]
+		if err := applyTLSAndTransport(ob, n.Protocol, p); err != nil {
+			return nil, err
 		}
-		return ob, nil
+	case "hysteria2", "hy2":
+		if p["password"] == "" {
+			return nil, fmt.Errorf("hysteria2 node is missing password")
+		}
+		ob["type"] = "hysteria2"
+		ob["password"] = p["password"]
+		if obfs := p["obfs"]; obfs != "" && obfs != "none" {
+			ob["obfs"] = map[string]any{"type": obfs, "password": p["obfs-password"]}
+		}
+		if ports := p["server_ports"]; ports != "" {
+			ob["server_ports"] = strings.Split(ports, ",")
+		}
+		tls, err := buildTLS("hysteria2", p, n.Address)
+		if err != nil {
+			return nil, err
+		}
+		ob["tls"] = tls
 	case "tuic":
-		return map[string]any{
-			"type":        "tuic",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"uuid":        n.Params["uuid"],
-			"password":    n.Params["password"],
-			"tls":         map[string]any{"enabled": true, "server_name": n.Params["sni"]},
-		}, nil
+		if p["uuid"] == "" || p["password"] == "" {
+			return nil, fmt.Errorf("tuic node is missing uuid or password")
+		}
+		ob["type"] = "tuic"
+		ob["uuid"] = p["uuid"]
+		ob["password"] = p["password"]
+		if cc := p["congestion_control"]; cc != "" {
+			ob["congestion_control"] = cc
+		}
+		if mode := p["udp_relay_mode"]; mode != "" {
+			ob["udp_relay_mode"] = mode
+		}
+		tls, err := buildTLS("tuic", p, n.Address)
+		if err != nil {
+			return nil, err
+		}
+		ob["tls"] = tls
+	case "shadowsocks", "ss":
+		if p["method"] == "" || p["password"] == "" {
+			return nil, fmt.Errorf("shadowsocks node is missing method or password")
+		}
+		ob["type"] = "shadowsocks"
+		ob["method"] = p["method"]
+		ob["password"] = p["password"]
+		if plugin := p["plugin"]; plugin != "" {
+			ob["plugin"] = plugin
+			if pluginOpts := p["plugin_opts"]; pluginOpts != "" {
+				ob["plugin_opts"] = pluginOpts
+			}
+		}
 	default:
-		return map[string]any{
-			"type":        "shadowsocks",
-			"tag":         tag,
-			"server":      n.Address,
-			"server_port": n.Port,
-			"method":      defaultString(n.Params["method"], "aes-256-gcm"),
-			"password":    n.Params["password"],
-		}, nil
+		return nil, fmt.Errorf("unsupported sing-box protocol %q", n.Protocol)
 	}
+
+	return ob, nil
+}
+
+func applyTLSAndTransport(ob map[string]any, protocol string, p map[string]string) error {
+	server, _ := ob["server"].(string)
+	tls, err := buildTLS(protocol, p, server)
+	if err != nil {
+		return err
+	}
+	if tls != nil {
+		ob["tls"] = tls
+	}
+	transport, err := buildTransport(p)
+	if err != nil {
+		return err
+	}
+	if transport != nil {
+		ob["transport"] = transport
+	}
+	return nil
+}
+
+func buildTLS(protocol string, p map[string]string, server string) (map[string]any, error) {
+	security := strings.ToLower(p["security"])
+	if security == "none" {
+		return nil, nil
+	}
+	enabled := security == "tls" || security == "reality" ||
+		protocol == "trojan" || protocol == "hysteria2" || protocol == "tuic" ||
+		truthy(p["tls"])
+	if !enabled {
+		return nil, nil
+	}
+	tls := map[string]any{"enabled": true}
+	sni := firstNonEmpty(p["sni"], p["server_name"], p["host"], server)
+	if sni != "" {
+		tls["server_name"] = sni
+	}
+	if truthy(p["insecure"]) || truthy(p["allowinsecure"]) || truthy(p["skip-cert-verify"]) {
+		tls["insecure"] = true
+	}
+	if alpn := firstNonEmpty(p["alpn"]); alpn != "" {
+		tls["alpn"] = splitList(alpn)
+	}
+	fp := firstNonEmpty(p["fp"], p["fingerprint"])
+	if fp == "" && security == "reality" {
+		fp = "chrome"
+	}
+	if fp != "" {
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
+	}
+	if security == "reality" {
+		if p["pbk"] == "" {
+			return nil, fmt.Errorf("reality node is missing public key")
+		}
+		reality := map[string]any{"enabled": true, "public_key": p["pbk"]}
+		if sid := p["sid"]; sid != "" {
+			reality["short_id"] = sid
+		}
+		tls["reality"] = reality
+	}
+	return tls, nil
+}
+
+func buildTransport(p map[string]string) (map[string]any, error) {
+	network := strings.ToLower(firstNonEmpty(p["type"], p["net"]))
+	switch network {
+	case "", "tcp":
+		if strings.EqualFold(p["headertype"], "http") {
+			return buildHTTPTransport(p, false), nil
+		}
+		return nil, nil
+	case "ws", "websocket":
+		tr := map[string]any{"type": "ws", "path": defaultString(p["path"], "/")}
+		if host := p["host"]; host != "" {
+			tr["headers"] = map[string]any{"Host": host}
+		}
+		return tr, nil
+	case "grpc":
+		service := firstNonEmpty(p["servicename"], strings.TrimPrefix(p["path"], "/"))
+		tr := map[string]any{"type": "grpc"}
+		if service != "" {
+			tr["service_name"] = service
+		}
+		return tr, nil
+	case "httpupgrade":
+		tr := map[string]any{"type": "httpupgrade", "path": defaultString(p["path"], "/")}
+		if host := p["host"]; host != "" {
+			tr["host"] = host
+		}
+		return tr, nil
+	case "http", "h2", "h3":
+		return buildHTTPTransport(p, true), nil
+	case "quic":
+		return map[string]any{"type": "quic"}, nil
+	case "xhttp", "splithttp":
+		return nil, fmt.Errorf("xhttp transport requires Xray-core")
+	default:
+		return nil, fmt.Errorf("unsupported sing-box transport %q", network)
+	}
+}
+
+func buildHTTPTransport(p map[string]string, withHost bool) map[string]any {
+	tr := map[string]any{"type": "http", "path": defaultString(p["path"], "/")}
+	if withHost && p["host"] != "" {
+		tr["host"] = splitList(p["host"])
+	}
+	return tr
+}
+
+func localRuleSet(tag, dir, file string) map[string]any {
+	return map[string]any{
+		"tag":    tag,
+		"type":   "local",
+		"format": "binary",
+		"path":   filepath.ToSlash(filepath.Join(dir, file)),
+	}
+}
+
+func availableRuleSets(dir string) map[string]bool {
+	available := map[string]bool{}
+	if dir == "" {
+		return available
+	}
+	for _, name := range []string{"geosite-ir", "geoip-ir"} {
+		if info, err := os.Stat(filepath.Join(dir, name+".srs")); err == nil && !info.IsDir() {
+			available[name] = true
+		}
+	}
+	return available
+}
+
+func filterDNSRules(rules []routing.DNSRule, available map[string]bool) []routing.DNSRule {
+	filtered := make([]routing.DNSRule, 0, len(rules))
+	for _, rule := range rules {
+		if len(rule.RuleSet) > 0 {
+			rule.RuleSet = filterNames(rule.RuleSet, available)
+			if len(rule.RuleSet) == 0 {
+				continue
+			}
+		}
+		filtered = append(filtered, rule)
+	}
+	return filtered
+}
+
+func filterRouteRules(rules []routing.RouteRule, available map[string]bool) []routing.RouteRule {
+	filtered := make([]routing.RouteRule, 0, len(rules))
+	for _, rule := range rules {
+		if len(rule.RuleSet) > 0 {
+			rule.RuleSet = filterNames(rule.RuleSet, available)
+			if len(rule.RuleSet) == 0 {
+				continue
+			}
+		}
+		filtered = append(filtered, rule)
+	}
+	return filtered
+}
+
+func filterNames(names []string, available map[string]bool) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if available[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func splitList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func defaultString(val, fallback string) string {

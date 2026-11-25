@@ -1,3 +1,9 @@
+# Local build/release outputs
+dist/
+
+# Build/Test Logs
+*.log
+
 # Operating System & IDE
 .DS_Store
 Thumbs.db

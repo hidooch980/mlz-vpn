@@ -39,21 +39,38 @@ class WindowsEngineBridge implements EngineBridge {
   Future<void> _ensureStarted(TunnelModeOption tunnelMode) async {
     final wantsElevated = tunnelMode == TunnelModeOption.tun;
     if (_activePort != null && _isElevatedSession == wantsElevated) {
-      return;
+      try {
+        await _request('GET', '/v1/status');
+        return;
+      } catch (_) {
+        await _shutdownCurrent();
+      }
     }
     await _shutdownCurrent();
+    // Give the previous engine a moment to release the single-instance lock.
+    await Future<void>.delayed(const Duration(milliseconds: 350));
 
     final port = await _allocateFreePort();
     final token = _generateToken();
     final exePath = _resolveEngineExecutable();
-    final args = '--mode=${tunnelMode.wireValue} --ipc-port=$port --token=$token';
+    // The installed layout puts the rules next to the executable. Pass the
+    // absolute path so a Start-menu shortcut does not depend on its working
+    // directory.
+    final rulesDir = p.join(File(exePath).parent.path, 'rules');
+    final args =
+        '--mode=${tunnelMode.wireValue} --ipc-port=$port --token=$token --ruleset-dir="$rulesDir"';
 
     if (wantsElevated) {
       _launchElevatedRunAs(exePath, args);
     } else {
       _unprivilegedProc = await Process.start(
         exePath,
-        ['--mode=proxy', '--ipc-port=$port', '--token=$token'],
+        [
+          '--mode=proxy',
+          '--ipc-port=$port',
+          '--token=$token',
+          '--ruleset-dir=$rulesDir',
+        ],
         mode: ProcessStartMode.detachedWithStdio,
       );
     }
@@ -76,7 +93,9 @@ class WindowsEngineBridge implements EngineBridge {
 
   void _launchElevatedRunAs(String exePath, String arguments) {
     final shell32 = DynamicLibrary.open('shell32.dll');
-    final shellExec = shell32.lookupFunction<_ShellExecuteWNative, _ShellExecuteWDart>('ShellExecuteW');
+    final shellExec =
+        shell32.lookupFunction<_ShellExecuteWNative, _ShellExecuteWDart>(
+            'ShellExecuteW');
 
     final op = 'runas'.toNativeUtf16();
     final file = exePath.toNativeUtf16();
@@ -86,7 +105,8 @@ class WindowsEngineBridge implements EngineBridge {
       const swHide = 0;
       final res = shellExec(0, op, file, params, dir, swHide);
       if (res <= 32) {
-        throw Exception('درخواست دسترسی ادمین (UAC) رد شد یا اجرا نشد (کد: $res).');
+        throw Exception(
+            'درخواست دسترسی ادمین (UAC) رد شد یا اجرا نشد (کد: $res).');
       }
     } finally {
       calloc.free(op);
@@ -112,10 +132,12 @@ class WindowsEngineBridge implements EngineBridge {
 
   String _generateToken() {
     final rng = Random.secure();
-    return List<String>.generate(32, (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    return List<String>.generate(
+        32, (_) => rng.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
-  Future<Map<String, dynamic>> _request(String method, String path, [Map<String, dynamic>? body]) async {
+  Future<Map<String, dynamic>> _request(String method, String path,
+      [Map<String, dynamic>? body]) async {
     if (_activePort == null) {
       throw Exception('Engine is not running');
     }
@@ -124,7 +146,8 @@ class WindowsEngineBridge implements EngineBridge {
       final uri = Uri.http('127.0.0.1:$_activePort', path);
       final req = await client.openUrl(method, uri);
       if (_sessionToken != null) {
-        req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_sessionToken');
+        req.headers
+            .set(HttpHeaders.authorizationHeader, 'Bearer $_sessionToken');
       }
       if (body != null) {
         req.headers.contentType = ContentType.json;
@@ -132,9 +155,12 @@ class WindowsEngineBridge implements EngineBridge {
       }
       final resp = await req.close();
       final text = await utf8.decodeStream(resp);
-      final decoded = jsonDecode(text) as Map<String, dynamic>;
-      if (resp.statusCode >= 400 && decoded['error'] != null) {
-        throw Exception(decoded['error'].toString());
+      final decoded = text.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(text) as Map<String, dynamic>;
+      if (resp.statusCode >= 400) {
+        throw Exception(
+            (decoded['error'] ?? 'HTTP ${resp.statusCode}').toString());
       }
       return decoded;
     } finally {
@@ -166,7 +192,10 @@ class WindowsEngineBridge implements EngineBridge {
     return _request('POST', '/v1/connect', {
       'tunnel_mode': tunnelMode.wireValue,
       'engine_mode': engineMode.wireValue,
-      'country': {'auto': country.isAuto, 'code': country.isAuto ? '' : country.code},
+      'country': {
+        'auto': country.isAuto,
+        'code': country.isAuto ? '' : country.code
+      },
       'battery_saver': batterySaver,
     });
   }
@@ -212,11 +241,13 @@ class WindowsEngineBridge implements EngineBridge {
   }
 
   @override
-  Future<LanShareModel> toggleLanShare({required bool enabled, required bool usePin}) async {
+  Future<LanShareModel> toggleLanShare(
+      {required bool enabled, required bool usePin}) async {
     if (_activePort == null) {
       await _ensureStarted(TunnelModeOption.proxy);
     }
-    final res = await _request('POST', '/v1/lan', {'enabled': enabled, 'use_pin': usePin});
+    final res = await _request(
+        'POST', '/v1/lan', {'enabled': enabled, 'use_pin': usePin});
     return LanShareModel.fromJson(res);
   }
 
@@ -236,7 +267,9 @@ class WindowsEngineBridge implements EngineBridge {
     return AppUpdateInfo(
       updateAvailable: true,
       version: (manifest['version'] as String?) ?? '1.0.0',
-      changelogFA: ((manifest['changelog_fa'] as List<dynamic>?) ?? const []).map((e) => e.toString()).toList(),
+      changelogFA: ((manifest['changelog_fa'] as List<dynamic>?) ?? const [])
+          .map((e) => e.toString())
+          .toList(),
       downloadUrl: (asset['url'] as String?) ?? '',
       sha256: (asset['sha256'] as String?) ?? '',
     );
@@ -244,17 +277,27 @@ class WindowsEngineBridge implements EngineBridge {
 
   @override
   Future<void> downloadAndInstallUpdate(AppUpdateInfo info) async {
-    if (info.downloadUrl.isEmpty) return;
+    if (info.downloadUrl.isEmpty || info.sha256.isEmpty) {
+      throw Exception('اطلاعات به‌روزرسانی ناقص است؛ دوباره بررسی کنید.');
+    }
     if (_activePort == null) {
       await _ensureStarted(TunnelModeOption.proxy);
     }
+    final isSetup = info.downloadUrl.toLowerCase().endsWith('.exe');
     final res = await _request('POST', '/v1/download-update', {
       'url': info.downloadUrl,
       'sha256': info.sha256,
-      'file_name': 'mlz-vpn-update-${info.version}.zip',
+      'file_name': isSetup
+          ? 'mlz-vpn-setup-${info.version}.exe'
+          : 'mlz-vpn-update-${info.version}.zip',
     });
     final path = res['path'] as String?;
-    if (path != null && path.isNotEmpty) {
+    if (path == null || path.isEmpty) return;
+    if (isSetup) {
+      // Per-user NSIS installer needs no UAC; it closes the running app, replaces
+      // files, and relaunches the new build when the user opens it again.
+      await Process.start(path, const [], mode: ProcessStartMode.detached);
+    } else {
       await launchUrl(Uri.file(File(path).parent.path));
     }
   }

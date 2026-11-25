@@ -49,8 +49,9 @@ func (stubProber) TestIranDirect(_ context.Context) bool                    { re
 func TestOrchestratorConnectXrayChainAndDisconnect(t *testing.T) {
 	runner := &stubRunner{}
 	orch := New(Config{
-		CacheDir:   t.TempDir(),
-		RuleSetDir: "./rules",
+		CacheDir:           t.TempDir(),
+		RuleSetDir:         "./rules",
+		DisableHealthCheck: true,
 		FeedSource: subscription.FeedSourceConfig{
 			EmbeddedSeeds: []model.FeedNode{
 				{
@@ -59,7 +60,7 @@ func TestOrchestratorConnectXrayChainAndDisconnect(t *testing.T) {
 					Protocol:  "vless",
 					Region:    "DE",
 					Weight:    0.9,
-					ConfigURI: "vless://11111111-1111-1111-1111-111111111111@de.example.com:443?type=xhttp&security=reality#DE",
+					ConfigURI: "vless://11111111-1111-1111-1111-111111111111@de.example.com:443?type=xhttp&security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=0123&sni=www.microsoft.com#DE",
 				},
 			},
 		},

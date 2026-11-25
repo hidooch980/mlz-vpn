@@ -16,12 +16,12 @@ type mockProber struct {
 	iranDirect bool
 }
 
-func (m mockProber) HasDefaultInterface(_ context.Context) bool      { return m.hasNet }
+func (m mockProber) HasDefaultInterface(_ context.Context) bool               { return m.hasNet }
 func (m mockProber) CheckClockSkewSeconds(_ context.Context) (float64, error) { return m.skew, nil }
-func (m mockProber) CheckDNSPoisoned(_ context.Context) (bool, error) { return m.poisoned, nil }
-func (m mockProber) HasConflictingSystemProxy() bool                  { return m.conflict }
-func (m mockProber) TestUDPReachable(_ context.Context) bool          { return m.udpOK }
-func (m mockProber) TestIranDirect(_ context.Context) bool            { return m.iranDirect }
+func (m mockProber) CheckDNSPoisoned(_ context.Context) (bool, error)         { return m.poisoned, nil }
+func (m mockProber) HasConflictingSystemProxy() bool                          { return m.conflict }
+func (m mockProber) TestUDPReachable(_ context.Context) bool                  { return m.udpOK }
+func (m mockProber) TestIranDirect(_ context.Context) bool                    { return m.iranDirect }
 
 func TestRunDiagnosticsAutoHeal(t *testing.T) {
 	report, action := RunDiagnostics(context.Background(), mockProber{

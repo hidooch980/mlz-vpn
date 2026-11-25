@@ -43,10 +43,10 @@
 2. **حالت Proxy سبک (بدون ادمین):** `mlz-engine.exe --mode=proxy` بدون UAC اجرا شده و `HKCU Internet Settings` را امن مدیریت می‌کند.
 3. **حالت TUN امن (درخواست ادمین هنگام اتصال):** هنگام کلیک روی دایره اتصال، `ShellExecuteExW("runas")` فرآیند `mlz-engine.exe --mode=tun --pipe=\\.\pipe\mlz-<id> --token=<secret>` را بالا می‌آورد و با قطع اتصال/خروج، `Wintun`، Routeها و Rule موقت فایروال را پاکسازی کرده و بسته می‌شود.
 
-### ب) Android: مدل `VpnService` + `gomobile` + `nativeLibraryDir`
+### ب) Android: مدل `VpnService` + `libbox` داخل `gomobile`
 1. `MlzVpnService` (`VpnService`) فایل دیسکریپتور `tunFd` و `SocketProtector` (`VpnService.protect`) را به `mlz-core.aar` می‌دهد.
-2. تمام هسته‌های Go (`sing-box`, `Xray-core`, `AmneziaWG`, `SpoofDPI`, `usque`, `Lyrebird`, `dnstt`, `Cloak`, `Psiphon`, `Brook`, `Trojan-Go`, `Lantern`, `Mieru`, `Juicity`, `Gost`, `Chisel`) داخل `mlz-core.aar` کامپایل می‌شوند.
-3. سایدکارهای C/Rust (`ByeDPI`, `Arti`, `NaiveProxy`, `wstunnel`, `kcptun`, `SIP003`) در `jniLibs/<abi>/libmlz_<name>.so` پکیج شده و از مسیر استاندارد `nativeLibraryDir` اجرا می‌شوند.
+2. تنها داده‌مسیر داخل AAR، **`sing-box` از طریق `libbox`** است. `Xray-core` و سایدکارهای پروسه‌ای فعلاً فقط در ویندوز اجرا می‌شوند؛ کاندیدهای سازگار با Xray/سایدکار در اندروید فیلتر می‌شوند تا اتصال به هسته‌ای که در بسته وجود ندارد داده نشود.
+3. هیچ پروسه جانبی یا `.so` جداگانه‌ای برای Xray/ByeDPI/... در APK بسته‌بندی نمی‌شود؛ افزودن آن‌ها یک کار آینده با کتابخانه بومی و تست سوخت است.
 
 ---
 
@@ -55,4 +55,4 @@
 - `pkg/parser`: پارس خودکار URIها و اشتراک‌های استاندارد (`vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `tuic://`, `ssconf://`).
 - `pkg/subscription`: راستی‌آزمایی امضای `Ed25519` روی فید ۵ دقیقه‌ای (`feed.v1.json`) و مدیریت بازه‌های باتری.
 - `pkg/routing`: تولید قوانین Split-DNS و مسیریابی مستقیم `.ir` + `.srs` برای `sing-box`.
-- `pkg/probe`, `pkg/diagnostics`, `pkg/cores`, `pkg/lan`, `pkg/ipc`: در گام‌های بعدی کدنویسی تکمیل می‌شوند.
+- `pkg/probe`, `pkg/diagnostics`, `pkg/cores`, `pkg/lan`, `pkg/ipc`: پیاده‌سازی شده و با تست‌های واحد/یکپارچه پوشش داده شده‌اند.

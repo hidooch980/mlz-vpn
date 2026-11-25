@@ -29,6 +29,26 @@ func NewClashClient(baseURL, secret string) *ClashClient {
 	}
 }
 
+// Ready checks that the local Clash API is serving requests.
+func (c *ClashClient) Ready(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/version", nil)
+	if err != nil {
+		return err
+	}
+	if c.secret != "" {
+		req.Header.Set("Authorization", "Bearer "+c.secret)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("clash /version returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 type clashTrafficSample struct {
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`

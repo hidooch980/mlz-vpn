@@ -93,13 +93,45 @@ func parseStandardURL(u *url.URL, scheme, rawURI string) (model.Node, error) {
 	params := make(map[string]string)
 	for k, v := range u.Query() {
 		if len(v) > 0 {
-			params[k] = v[0]
+			params[k] = strings.ToLower(strings.TrimSpace(v[0]))
 		}
 	}
 
 	protocol := scheme
 	if scheme == "hy2" {
 		protocol = "hysteria2"
+	}
+
+	// Credentials live in the URI userinfo and were previously dropped entirely,
+	// producing outbounds without UUID/password. Keep them in Params so both core
+	// builders and tests can consume the same normalized representation.
+	if u.User != nil {
+		username := u.User.Username()
+		password, hasPassword := u.User.Password()
+		switch protocol {
+		case "vless":
+			if username == "" {
+				return model.Node{}, errors.New("vless requires a UUID")
+			}
+			params["uuid"] = username
+		case "trojan", "hysteria2":
+			if !hasPassword && username == "" {
+				return model.Node{}, errors.New(protocol + " requires a password")
+			}
+			if hasPassword {
+				// Standard form is scheme://password@host. A colon is legal inside
+				// the password, so preserve the complete userinfo.
+				params["password"] = username + ":" + password
+			} else {
+				params["password"] = username
+			}
+		case "tuic":
+			if username == "" || !hasPassword {
+				return model.Node{}, errors.New("tuic requires uuid:password userinfo")
+			}
+			params["uuid"] = username
+			params["password"] = password
+		}
 	}
 
 	engine := model.CoreSingBox
@@ -119,22 +151,22 @@ func parseStandardURL(u *url.URL, scheme, rawURI string) (model.Node, error) {
 }
 
 type vmessJSON struct {
-	V    any    `json:"v"`
-	PS   string `json:"ps"`
-	Add  string `json:"add"`
-	Port any    `json:"port"`
-	ID   string `json:"id"`
-	Net  string `json:"net"`
-	Type string `json:"type"`
-	Host string `json:"host"`
-	Path string `json:"path"`
-	TLS  string `json:"tls"`
-	SNI  string `json:"sni"`
+	V        any    `json:"v"`
+	PS       string `json:"ps"`
+	Add      string `json:"add"`
+	Port     any    `json:"port"`
+	ID       string `json:"id"`
+	Net      string `json:"net"`
+	Type     string `json:"type"`
+	Host     string `json:"host"`
+	Path     string `json:"path"`
+	TLS      string `json:"tls"`
+	SNI      string `json:"sni"`
+	Security string `json:"scy"`
 }
 
 func parseVMess(rawURI string) (model.Node, error) {
-	encoded := strings.TrimPrefix(rawURI, "vmess://")
-	encoded = strings.TrimPrefix(encoded, "VMESS://")
+	encoded := rawURI[len("vmess://"):]
 	rawJSON, err := decodeBase64Flexible(encoded)
 	if err != nil {
 		return model.Node{}, fmt.Errorf("invalid vmess base64: %w", err)
@@ -153,30 +185,51 @@ func parseVMess(rawURI string) (model.Node, error) {
 		return model.Node{}, errors.New("invalid vmess port")
 	}
 
+	engine := model.CoreSingBox
+	if strings.EqualFold(v.Net, "xhttp") || strings.EqualFold(v.Net, "splithttp") {
+		engine = model.CoreXray
+	}
+	security := v.Security
+	if security == "" {
+		security = "auto"
+	}
 	return model.Node{
 		Name:     fallbackName(v.PS, net.JoinHostPort(v.Add, strconv.Itoa(port))),
-		Engine:   model.CoreSingBox,
+		Engine:   engine,
 		Protocol: "vmess",
 		Address:  v.Add,
 		Port:     port,
 		RawURI:   rawURI,
 		Params: map[string]string{
-			"uuid": v.ID,
-			"net":  v.Net,
-			"tls":  v.TLS,
-			"sni":  v.SNI,
-			"host": v.Host,
-			"path": v.Path,
+			"uuid":     v.ID,
+			"net":      v.Net,
+			"type":     v.Net,
+			"tls":      v.TLS,
+			"sni":      v.SNI,
+			"host":     v.Host,
+			"path":     v.Path,
+			"security": security,
 		},
 	}, nil
 }
 
 func parseShadowsocks(rawURI string) (model.Node, error) {
-	u, err := url.Parse(rawURI)
-	if err == nil && u.Hostname() != "" && u.Port() != "" {
+	// SIP002: ss://BASE64(method:password)@host:port?plugin=...#name
+	// Also accept the unencoded method:password@host:port form.
+	if u, err := url.Parse(rawURI); err == nil && u.Hostname() != "" && u.Port() != "" {
 		port, err := strconv.Atoi(u.Port())
 		if err != nil || port <= 0 || port > 65535 {
 			return model.Node{}, errors.New("invalid ss port")
+		}
+		method, password, err := decodeSSUserInfo(u)
+		if err != nil {
+			return model.Node{}, err
+		}
+		params := map[string]string{"method": method, "password": password}
+		for k, v := range u.Query() {
+			if len(v) > 0 {
+				params[strings.ToLower(k)] = v[0]
+			}
 		}
 		return model.Node{
 			Name:     fallbackName(u.Fragment, u.Host),
@@ -185,25 +238,37 @@ func parseShadowsocks(rawURI string) (model.Node, error) {
 			Address:  u.Hostname(),
 			Port:     port,
 			RawURI:   rawURI,
+			Params:   params,
 		}, nil
 	}
 
 	// Fallback for legacy ss://<base64(method:password@host:port)>#name
-	body := strings.TrimPrefix(rawURI, "ss://")
+	body := rawURI[len("ss://"):]
 	fragment := ""
 	if idx := strings.IndexByte(body, '#'); idx >= 0 {
 		fragment, _ = url.QueryUnescape(body[idx+1:])
+		body = body[:idx]
+	}
+	query := url.Values{}
+	if idx := strings.IndexByte(body, '?'); idx >= 0 {
+		query, _ = url.ParseQuery(body[idx+1:])
 		body = body[:idx]
 	}
 	decoded, err := decodeBase64Flexible(body)
 	if err != nil {
 		return model.Node{}, fmt.Errorf("invalid legacy ss URI: %w", err)
 	}
-	atIdx := strings.LastIndexByte(string(decoded), '@')
+	payload := string(decoded)
+	atIdx := strings.LastIndexByte(payload, '@')
 	if atIdx < 0 {
 		return model.Node{}, errors.New("missing @ in ss payload")
 	}
-	hostPort := string(decoded)[atIdx+1:]
+	creds := payload[:atIdx]
+	hostPort := payload[atIdx+1:]
+	method, password, ok := strings.Cut(creds, ":")
+	if !ok || method == "" || password == "" {
+		return model.Node{}, errors.New("invalid ss credentials")
+	}
 	host, portStr, err := net.SplitHostPort(hostPort)
 	if err != nil {
 		return model.Node{}, fmt.Errorf("invalid ss host:port: %w", err)
@@ -212,6 +277,15 @@ func parseShadowsocks(rawURI string) (model.Node, error) {
 	if err != nil || port <= 0 || port > 65535 {
 		return model.Node{}, errors.New("invalid ss port")
 	}
+	params := map[string]string{
+		"method":   strings.ToLower(strings.TrimSpace(method)),
+		"password": password,
+	}
+	for k, v := range query {
+		if len(v) > 0 {
+			params[strings.ToLower(k)] = v[0]
+		}
+	}
 	return model.Node{
 		Name:     fallbackName(fragment, hostPort),
 		Engine:   model.CoreSingBox,
@@ -219,7 +293,27 @@ func parseShadowsocks(rawURI string) (model.Node, error) {
 		Address:  host,
 		Port:     port,
 		RawURI:   rawURI,
+		Params:   params,
 	}, nil
+}
+
+func decodeSSUserInfo(u *url.URL) (string, string, error) {
+	if u.User == nil {
+		return "", "", errors.New("ss URI is missing credentials")
+	}
+	username := u.User.Username()
+	if password, ok := u.User.Password(); ok && username != "" {
+		return strings.ToLower(username), password, nil
+	}
+	decoded, err := decodeBase64Flexible(username)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid base64 ss credentials: %w", err)
+	}
+	method, password, ok := strings.Cut(string(decoded), ":")
+	if !ok || method == "" || password == "" {
+		return "", "", errors.New("invalid ss credentials")
+	}
+	return strings.ToLower(strings.TrimSpace(method)), password, nil
 }
 
 func decodeBase64Flexible(s string) ([]byte, error) {

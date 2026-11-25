@@ -46,7 +46,9 @@ class MlzTileService : TileService() {
         } else {
             startService(start)
         }
-        qsTile?.state = Tile.STATE_ACTIVE
+        // Do not claim an active tunnel here: MlzVpnService fails closed if the
+        // native core is missing, and onStartListening will reflect the truth.
+        qsTile?.state = Tile.STATE_INACTIVE
         qsTile?.updateTile()
     }
 }

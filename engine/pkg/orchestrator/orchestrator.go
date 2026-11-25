@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,9 +32,17 @@ type CoreRunner interface {
 	StopXray() error
 }
 
+// nodeDelayProber is implemented by runners that can measure true proxy delay
+// through a temporary local core (desktop subprocess runner).
+type nodeDelayProber interface {
+	ProbeNodeDelays(ctx context.Context, nodes []model.Node) (map[string]int, error)
+}
+
 // Config configures the orchestrator instance.
 type Config struct {
 	CurrentBuild    int
+	CurrentVersion  string
+	UpdatePublicKey string
 	CacheDir        string
 	RuleSetDir      string
 	AndroidLibDir   string
@@ -42,6 +52,10 @@ type Config struct {
 	LocalMixedPort  int
 	LANSharePort    int
 	ClashAPIPort    int
+
+	// DisableHealthCheck is used by tests and by runners that expose no Clash API.
+	DisableHealthCheck bool
+	HealthCheckTimeout time.Duration
 }
 
 // ConnectRequest carries the user's zero-config mode and country selections.
@@ -54,29 +68,29 @@ type ConnectRequest struct {
 
 // StatusSnapshot is emitted to Flutter UI / Android Kotlin over IPC/EventChannel.
 type StatusSnapshot struct {
-	State          model.ConnectionState `json:"state"`
-	TunnelMode     model.TunnelMode      `json:"tunnel_mode"`
-	EngineMode     model.EngineMode      `json:"engine_mode"`
+	State          model.ConnectionState   `json:"state"`
+	TunnelMode     model.TunnelMode        `json:"tunnel_mode"`
+	EngineMode     model.EngineMode        `json:"engine_mode"`
 	Country        model.CountryPreference `json:"country"`
-	ActiveCore     model.CoreKind        `json:"active_core"`
-	ActiveNodeName string                `json:"active_node_name"`
-	ActiveRegion   string                `json:"active_region"`
-	Stats          model.TrafficStats    `json:"stats"`
-	LastSyncUnix   int64                 `json:"last_sync_unix"`
-	LastIPTest     *model.IPTestResult   `json:"last_ip_test,omitempty"`
-	LAN            lan.ShareInfo         `json:"lan"`
-	ErrorMessageFA string                `json:"error_message_fa,omitempty"`
+	ActiveCore     model.CoreKind          `json:"active_core"`
+	ActiveNodeName string                  `json:"active_node_name"`
+	ActiveRegion   string                  `json:"active_region"`
+	Stats          model.TrafficStats      `json:"stats"`
+	LastSyncUnix   int64                   `json:"last_sync_unix"`
+	LastIPTest     *model.IPTestResult     `json:"last_ip_test,omitempty"`
+	LAN            lan.ShareInfo           `json:"lan"`
+	ErrorMessageFA string                  `json:"error_message_fa,omitempty"`
 }
 
 // Orchestrator owns the complete VPN runtime state machine.
 type Orchestrator struct {
-	mu           sync.RWMutex
-	cfg          Config
-	fetcher      *subscription.Fetcher
-	sidecars     *cores.Manager
-	runner       CoreRunner
-	dialer       probe.NodeDialer
-	prober       diagnostics.Prober
+	mu       sync.RWMutex
+	cfg      Config
+	fetcher  *subscription.Fetcher
+	sidecars *cores.Manager
+	runner   CoreRunner
+	dialer   probe.NodeDialer
+	prober   diagnostics.Prober
 
 	state           model.ConnectionState
 	tunnelMode      model.TunnelMode
@@ -92,6 +106,7 @@ type Orchestrator struct {
 	connectedAt     time.Time
 	clashSecret     string
 	telemetryCancel context.CancelFunc
+	proxyApplied    bool
 }
 
 // New constructs an Orchestrator with defaults and embedded dependencies.
@@ -108,7 +123,7 @@ func New(cfg Config, runner CoreRunner) *Orchestrator {
 	ip, ips := lan.DetectLANAddresses()
 	return &Orchestrator{
 		cfg:        cfg,
-		fetcher:    subscription.NewFetcher(cfg.FeedSource),
+		fetcher:    subscription.NewFetcher(withFeedState(cfg)),
 		sidecars:   cores.NewManager(cfg.CacheDir, cfg.AndroidLibDir, cfg.IsElevated),
 		runner:     runner,
 		dialer:     probe.DirectDialer{},
@@ -127,12 +142,24 @@ func New(cfg Config, runner CoreRunner) *Orchestrator {
 	}
 }
 
+func withFeedState(cfg Config) subscription.FeedSourceConfig {
+	feed := cfg.FeedSource
+	if feed.StatePath == "" && cfg.CacheDir != "" {
+		feed.StatePath = filepath.Join(cfg.CacheDir, "feed.sequence")
+	}
+	return feed
+}
+
 // Snapshot returns a thread-safe copy of the current VPN status for the UI.
 func (o *Orchestrator) Snapshot() StatusSnapshot {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
 	_, lastSync := o.fetcher.CachedNodes()
+	lastSyncUnix := int64(0)
+	if !lastSync.IsZero() {
+		lastSyncUnix = lastSync.Unix()
+	}
 	nodeName := ""
 	region := ""
 	if o.activeNode != nil {
@@ -148,7 +175,7 @@ func (o *Orchestrator) Snapshot() StatusSnapshot {
 		ActiveNodeName: nodeName,
 		ActiveRegion:   region,
 		Stats:          o.stats,
-		LastSyncUnix:   lastSync.Unix(),
+		LastSyncUnix:   lastSyncUnix,
 		LastIPTest:     o.lastIPTest,
 		LAN:            o.lanInfo,
 		ErrorMessageFA: o.errorMsgFA,
@@ -160,6 +187,9 @@ func (o *Orchestrator) StartBackgroundSync(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
+	// Sync immediately so a fresh install does not wait a full minute for the
+	// first signed feed and a zero Unix timestamp never reaches the UI.
+	_, _ = o.SyncFeed(ctx, false)
 	for {
 		select {
 		case <-ctx.Done():
@@ -184,7 +214,8 @@ func (o *Orchestrator) SyncFeed(ctx context.Context, force bool) (bool, error) {
 }
 
 // Connect selects the optimal node using Real Delay, starts Xray/Sidecars if needed,
-// and launches sing-box as the master TUN/DNS router.
+// and launches sing-box as the master TUN/DNS router. Up to three top-ranked nodes
+// are attempted; a node is only accepted after the core health check passes.
 func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 	o.mu.Lock()
 	o.state = model.StateConnecting
@@ -195,6 +226,15 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 	o.errorMsgFA = ""
 	o.mu.Unlock()
 
+	if runtime.GOOS == "android" {
+		switch req.EngineMode {
+		case model.EngineModeAuto, model.EngineModeSingBoxFast, model.EngineModeBatterySaver:
+		default:
+			o.failWith("این حالت هسته فقط در ویندوز پشتیبانی می‌شود؛ در اندروید حالت «اتوماتیک هوشمند» یا «سرعت و گیمینگ» را انتخاب کنید.")
+			return errors.New("engine mode is not available on android")
+		}
+	}
+
 	// Refresh cached feed opportunistically if stale, falling back to seeds cleanly.
 	_, _ = o.fetcher.SyncIfDue(ctx, false, req.BatterySaver, 0)
 	nodes, _ := o.fetcher.CachedNodes()
@@ -203,15 +243,31 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		return errors.New("no candidate nodes")
 	}
 
-	ranked := probe.RankNodes(ctx, nodes, req.EngineMode, req.Country, o.dialer)
+	// Protocol-aware local core probing gives true end-to-end Real Delay.
+	if coreProber, ok := o.runner.(nodeDelayProber); ok {
+		probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		delays, err := coreProber.ProbeNodeDelays(probeCtx, nodes)
+		cancel()
+		if err == nil && len(delays) > 0 {
+			o.mu.Lock()
+			o.dialer = probe.MeasuredDialer{Delays: delays, Fallback: probe.TCPDialer{}}
+			o.mu.Unlock()
+		}
+	}
+
+	o.mu.RLock()
+	dialer := o.dialer
+	o.mu.RUnlock()
+
+	ranked := probe.RankNodes(ctx, nodes, req.EngineMode, req.Country, dialer)
 	if len(ranked) == 0 {
-		// Automatic self-healing attempt before failing!
+		// Automatic self-healing attempt before failing.
 		o.mu.Lock()
 		o.state = model.StateHealing
 		o.mu.Unlock()
 		_, healAction := diagnostics.RunDiagnostics(ctx, o.prober)
 		if healAction.RecommendedMode != "" && healAction.RecommendedMode != req.EngineMode {
-			ranked = probe.RankNodes(ctx, nodes, healAction.RecommendedMode, req.Country, o.dialer)
+			ranked = probe.RankNodes(ctx, nodes, healAction.RecommendedMode, req.Country, dialer)
 		}
 		if len(ranked) == 0 {
 			o.failWith("سرور مناسبی پاسخ نداد؛ لطفاً بخش عیب‌یابی هوشمند را اجرا کنید.")
@@ -219,14 +275,65 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		}
 	}
 
-	chosen := ranked[0]
-	if err := o.startCoresForNode(ctx, chosen.Node, req); err != nil {
-		o.failWith(fmt.Sprintf("خطا در راه‌اندازی هسته: %v", err))
-		return err
+	if runtime.GOOS == "android" {
+		filtered := make([]probe.ProbeResult, 0, len(ranked))
+		for _, candidate := range ranked {
+			if candidate.Node.Engine != "" && candidate.Node.Engine != model.CoreSingBox {
+				continue
+			}
+			filtered = append(filtered, candidate)
+		}
+		if len(filtered) == 0 {
+			o.failWith("در اندروید فقط سرورهای سازگار با sing-box پشتیبانی می‌شوند؛ سرور دیگری انتخاب کنید یا فید را تازه کنید.")
+			return errors.New("no sing-box compatible nodes for android")
+		}
+		ranked = filtered
+	}
+
+	attempts := ranked
+	if len(attempts) > 3 {
+		attempts = attempts[:3]
+	}
+	var chosen *probe.ProbeResult
+	var lastErr error
+	for i := range attempts {
+		candidate := attempts[i]
+		if err := o.startCoresForNode(ctx, candidate.Node, req); err != nil {
+			lastErr = err
+			o.stopCores()
+			continue
+		}
+		if !o.cfg.DisableHealthCheck && o.cfg.ClashAPIPort > 0 {
+			if err := o.waitClashReady(ctx); err != nil {
+				lastErr = err
+				o.stopCores()
+				continue
+			}
+		}
+		chosen = &attempts[i]
+		break
+	}
+	if chosen == nil {
+		msg := "خطا در راه‌اندازی هسته"
+		if lastErr != nil {
+			msg = fmt.Sprintf("خطا در راه‌اندازی هسته: %v", lastErr)
+		}
+		o.failWith(msg)
+		if lastErr != nil {
+			return lastErr
+		}
+		return errors.New("failed to start any candidate node")
 	}
 
 	if req.TunnelMode == model.TunnelModeProxy {
-		_ = ApplySystemProxy(o.cfg.LocalMixedPort)
+		if err := ApplySystemProxy(o.cfg.LocalMixedPort); err != nil {
+			o.stopCores()
+			o.failWith(fmt.Sprintf("تنظیم پراکسی سیستم ناموفق بود: %v", err))
+			return err
+		}
+		o.mu.Lock()
+		o.proxyApplied = true
+		o.mu.Unlock()
 	}
 
 	o.mu.Lock()
@@ -248,6 +355,50 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		go o.streamClashTelemetry(telCtx, clashPort, secret)
 	}
 	return nil
+}
+
+// waitClashReady waits until the newly started sing-box exposes its Clash API.
+func (o *Orchestrator) waitClashReady(ctx context.Context) error {
+	timeout := o.cfg.HealthCheckTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	o.mu.RLock()
+	secret := o.clashSecret
+	o.mu.RUnlock()
+	client := cores.NewClashClient(fmt.Sprintf("http://127.0.0.1:%d", o.cfg.ClashAPIPort), secret)
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		lastErr = client.Ready(probeCtx)
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if reporter, ok := o.runner.(interface{ SingBoxFailure() string }); ok {
+				if detail := reporter.SingBoxFailure(); detail != "" {
+					return fmt.Errorf("%w: %s", lastErr, detail)
+				}
+			}
+			return lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// stopCores tears down the active sing-box/Xray processes and all sidecars.
+func (o *Orchestrator) stopCores() {
+	if o.runner != nil {
+		_ = o.runner.StopSingBox()
+		_ = o.runner.StopXray()
+	}
+	o.sidecars.StopAll()
 }
 
 func (o *Orchestrator) streamClashTelemetry(ctx context.Context, port int, secret string) {
@@ -374,14 +525,14 @@ func (o *Orchestrator) Disconnect() error {
 		o.telemetryCancel()
 		o.telemetryCancel = nil
 	}
+	proxyWasApplied := o.proxyApplied
+	o.proxyApplied = false
 	o.mu.Unlock()
 
-	if o.runner != nil {
-		_ = o.runner.StopSingBox()
-		_ = o.runner.StopXray()
+	o.stopCores()
+	if proxyWasApplied {
+		_ = ClearSystemProxy()
 	}
-	o.sidecars.StopAll()
-	_ = ClearSystemProxy()
 	_ = lan.CloseFirewallPort()
 
 	o.mu.Lock()
@@ -413,10 +564,64 @@ func (o *Orchestrator) TestIPHealth(ctx context.Context) (model.IPTestResult, er
 	return res, nil
 }
 
-// RunSmartDiagnostics runs the 7-step diagnostic suite and returns human-friendly Persian output.
+// RunSmartDiagnostics runs the 7-step diagnostic suite and, when connected and
+// the ISP blocks UDP/DPI, actually reconnects through the recommended resilient
+// engine instead of merely reporting that a fix was applied.
 func (o *Orchestrator) RunSmartDiagnostics(ctx context.Context) model.DiagnosticsReport {
-	report, _ := diagnostics.RunDiagnostics(ctx, o.prober)
+	report, action := diagnostics.RunDiagnostics(ctx, o.prober)
+
+	o.mu.RLock()
+	state := o.state
+	currentMode := o.engineMode
+	tunnelMode := o.tunnelMode
+	country := o.country
+	battery := o.batterySaver
+	o.mu.RUnlock()
+
+	if state != model.StateConnected || action.RecommendedMode == "" || action.RecommendedMode == model.EngineModeAuto {
+		return report
+	}
+	if currentMode == action.RecommendedMode {
+		markDiagnosticApplied(&report, "dpi", "محدودیت UDP شناسایی شد؛ اتصال فعلی از قبل روی مسیر مقاوم TCP/Xray قرار دارد.")
+		return report
+	}
+
+	req := ConnectRequest{
+		TunnelMode:   tunnelMode,
+		EngineMode:   action.RecommendedMode,
+		Country:      country,
+		BatterySaver: battery,
+	}
+	if err := o.Connect(ctx, req); err != nil {
+		markDiagnosticFailed(&report, "dpi", fmt.Sprintf("انتقال خودکار به مسیر مقاوم TCP/Xray ناموفق بود: %v", err))
+		report.SummaryFA += " تلاش برای ترمیم خودکار ناموفق بود؛ دوباره امتحان کنید."
+		return report
+	}
+	markDiagnosticApplied(&report, "dpi", "محدودیت UDP/DPI شناسایی و اتصال به‌طور خودکار روی مسیر مقاوم TCP/Xray بازسازی شد.")
+	report.SummaryFA = strings.TrimSpace(report.SummaryFA + " اتصال خودکار با هسته مقاوم انجام شد.")
 	return report
+}
+
+func markDiagnosticApplied(report *model.DiagnosticsReport, id, detail string) {
+	for i := range report.Steps {
+		if report.Steps[i].ID == id {
+			report.Steps[i].Status = "fixed"
+			report.Steps[i].DetailFA = detail
+			report.Steps[i].AutoApplied = true
+			return
+		}
+	}
+}
+
+func markDiagnosticFailed(report *model.DiagnosticsReport, id, detail string) {
+	for i := range report.Steps {
+		if report.Steps[i].ID == id {
+			report.Steps[i].Status = "failed"
+			report.Steps[i].DetailFA = detail
+			report.Steps[i].AutoApplied = false
+			return
+		}
+	}
 }
 
 // LANInfo returns the current LAN/Hotspot proxy sharing configuration.
@@ -426,8 +631,9 @@ func (o *Orchestrator) LANInfo() lan.ShareInfo {
 	return o.lanInfo
 }
 
-// SetLANSharing toggles hotspot/LAN proxy sharing and opens/closes Windows Firewall cleanly.
-func (o *Orchestrator) SetLANSharing(_ context.Context, enabled, usePIN bool) (lan.ShareInfo, error) {
+// SetLANSharing toggles hotspot/LAN proxy sharing, rebuilds the live sing-box
+// config when connected, and opens/closes the Windows Firewall rule cleanly.
+func (o *Orchestrator) SetLANSharing(ctx context.Context, enabled, usePIN bool) (lan.ShareInfo, error) {
 	ip, ips := lan.DetectLANAddresses()
 	pin := ""
 	user := ""
@@ -456,7 +662,33 @@ func (o *Orchestrator) SetLANSharing(_ context.Context, enabled, usePIN bool) (l
 		FirewallManaged: fwManaged,
 	}
 	info := o.lanInfo
+	connected := o.state == model.StateConnected
+	var active model.Node
+	hasActive := false
+	if o.activeNode != nil {
+		active = *o.activeNode
+		hasActive = true
+	}
+	req := ConnectRequest{
+		TunnelMode:   o.tunnelMode,
+		EngineMode:   o.engineMode,
+		Country:      o.country,
+		BatterySaver: o.batterySaver,
+	}
 	o.mu.Unlock()
+
+	if connected && hasActive {
+		if err := o.startCoresForNode(ctx, active, req); err != nil {
+			o.failWith(fmt.Sprintf("بازسازی تنظیمات اشتراک LAN ناموفق بود: %v", err))
+			return info, err
+		}
+		if !o.cfg.DisableHealthCheck && o.cfg.ClashAPIPort > 0 {
+			if err := o.waitClashReady(ctx); err != nil {
+				o.failWith(fmt.Sprintf("هسته پس از تغییر اشتراک LAN پاسخ نداد: %v", err))
+				return info, err
+			}
+		}
+	}
 	return info, nil
 }
 
@@ -468,7 +700,7 @@ func (o *Orchestrator) CheckAppUpdate(ctx context.Context) (updater.CheckResult,
 		port = o.cfg.LocalMixedPort
 	}
 	o.mu.RUnlock()
-	return updater.CheckForUpdate(ctx, o.cfg.CurrentBuild, o.cfg.ManifestURLs, port)
+	return updater.CheckForUpdateVersionSigned(ctx, o.cfg.CurrentBuild, o.cfg.CurrentVersion, o.cfg.ManifestURLs, port, o.cfg.UpdatePublicKey)
 }
 
 // DownloadAppUpdate fetches and SHA-256 verifies a release artifact into CacheDir/updates.

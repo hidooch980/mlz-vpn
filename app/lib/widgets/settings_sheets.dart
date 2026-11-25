@@ -6,7 +6,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../state/vpn_controller.dart';
 import '../theme/mlz_theme.dart';
 
-void openDiagnosticsSheet(BuildContext context, MlzAppState _, VpnController ctrl) {
+void openDiagnosticsSheet(
+    BuildContext context, MlzAppState _, VpnController ctrl) {
   final c = Theme.of(context).extension<MlzColors>()!;
   ctrl.runDiagnostics();
 
@@ -14,7 +15,8 @@ void openDiagnosticsSheet(BuildContext context, MlzAppState _, VpnController ctr
     context: context,
     backgroundColor: c.canvas,
     isScrollControlled: true,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
     builder: (ctx) {
       return Consumer(
         builder: (ctx, ref, _) {
@@ -28,18 +30,48 @@ void openDiagnosticsSheet(BuildContext context, MlzAppState _, VpnController ctr
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('عیب‌یاب و خودترمیمی هوشمند', style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
+                    Text('عیب‌یاب و خودترمیمی هوشمند',
+                        style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800)),
                     const SizedBox(height: 10),
-                    if (liveState.diagnosticsRunning || liveState.diagnosticsReport == null)
+                    if (liveState.diagnosticsRunning)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 28),
-                        child: Center(child: CircularProgressIndicator(color: c.brandPrimary)),
+                        child: Center(
+                            child: CircularProgressIndicator(
+                                color: c.brandPrimary)),
                       )
-                    else ...[
+                    else if (liveState.diagnosticsReport == null) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Text(
+                          liveState.errorMessageFA ?? 'گزارشی در دسترس نیست.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: c.error, fontSize: 12),
+                        ),
+                      ),
+                      FilledButton.icon(
+                        onPressed: ctrl.runDiagnostics,
+                        icon: const Icon(Icons.refresh_rounded, size: 18),
+                        label: const Text('تلاش دوباره'),
+                      ),
+                    ] else ...[
                       SpatialGlassCard(
                         padding: const EdgeInsets.all(12),
-                        child: Text(liveState.diagnosticsReport!.summaryFA, style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                        child: Text(liveState.diagnosticsReport!.summaryFA,
+                            style:
+                                TextStyle(color: c.textPrimary, fontSize: 13)),
                       ),
+                      if (liveState.errorMessageFA != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          liveState.errorMessageFA!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: c.error, fontSize: 12),
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       ...liveState.diagnosticsReport!.steps.map(
                         (step) => Padding(
@@ -49,13 +81,25 @@ void openDiagnosticsSheet(BuildContext context, MlzAppState _, VpnController ctr
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Expanded(child: Text(step.titleFA, style: TextStyle(color: c.textPrimary, fontSize: 13))),
+                                Expanded(
+                                    child: Text(step.titleFA,
+                                        style: TextStyle(
+                                            color: c.textPrimary,
+                                            fontSize: 13))),
                                 Text(
-                                  step.status == 'ok' ? 'سالم ✓' : (step.status == 'fixed' ? 'اصلاح شد' : 'نیاز به بررسی'),
+                                  step.status == 'ok'
+                                      ? 'سالم ✓'
+                                      : (step.status == 'fixed'
+                                          ? 'اصلاح شد'
+                                          : 'نیاز به بررسی'),
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w700,
-                                    color: step.status == 'ok' ? c.connectedGlow : (step.status == 'fixed' ? c.brandPrimary : c.error),
+                                    color: step.status == 'ok'
+                                        ? c.connectedGlow
+                                        : (step.status == 'fixed'
+                                            ? c.brandPrimary
+                                            : c.error),
                                   ),
                                 ),
                               ],
@@ -75,7 +119,8 @@ void openDiagnosticsSheet(BuildContext context, MlzAppState _, VpnController ctr
   );
 }
 
-void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) {
+void openLanShareSheet(
+    BuildContext context, MlzAppState _, VpnController ctrl) {
   final c = Theme.of(context).extension<MlzColors>()!;
   bool usePin = true;
 
@@ -83,12 +128,15 @@ void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) 
     context: context,
     backgroundColor: c.canvas,
     isScrollControlled: true,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
     builder: (ctx) {
       return Consumer(
         builder: (ctx, ref, _) {
-          final lan = ref.watch(vpnControllerProvider).lanShare;
-          final qrData = 'http://${lan.username.isNotEmpty ? '${lan.username}:${lan.pin}@' : ''}${lan.primaryIp}:${lan.port}';
+          final liveState = ref.watch(vpnControllerProvider);
+          final lan = liveState.lanShare;
+          final qrData =
+              'http://${lan.username.isNotEmpty ? '${lan.username}:${lan.pin}@' : ''}${lan.primaryIp}:${lan.port}';
 
           return Directionality(
             textDirection: TextDirection.rtl,
@@ -102,13 +150,42 @@ void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) 
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('اشتراک نقطه اتصال (LAN / Hotspot)', style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
-                        Switch(
-                          value: lan.enabled,
-                          onChanged: (v) => ctrl.toggleLanSharing(enabled: v, usePin: usePin),
+                        Text('اشتراک نقطه اتصال (LAN / Hotspot)',
+                            style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800)),
+                        Row(
+                          children: [
+                            if (liveState.lanBusy)
+                              const Padding(
+                                padding: EdgeInsetsDirectional.only(end: 8),
+                                child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              ),
+                            Switch(
+                              value: lan.enabled,
+                              onChanged: liveState.lanBusy
+                                  ? null
+                                  : (v) => ctrl.toggleLanSharing(
+                                      enabled: v, usePin: usePin),
+                            ),
+                          ],
                         ),
                       ],
                     ),
+                    if (liveState.errorMessageFA != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        liveState.errorMessageFA!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: c.error, fontSize: 12),
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     SpatialGlassCard(
                       padding: const EdgeInsets.all(14),
@@ -117,10 +194,15 @@ void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) 
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('آدرس پراکسی:', style: TextStyle(color: c.textMuted, fontSize: 12)),
+                              Text('آدرس پراکسی:',
+                                  style: TextStyle(
+                                      color: c.textMuted, fontSize: 12)),
                               Directionality(
                                 textDirection: TextDirection.ltr,
-                                child: Text('${lan.primaryIp}:${lan.port}', style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w700)),
+                                child: Text('${lan.primaryIp}:${lan.port}',
+                                    style: TextStyle(
+                                        color: c.textPrimary,
+                                        fontWeight: FontWeight.w700)),
                               ),
                             ],
                           ),
@@ -129,25 +211,37 @@ void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) 
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text('پین امنیتی:', style: TextStyle(color: c.textMuted, fontSize: 12)),
+                                Text('پین امنیتی:',
+                                    style: TextStyle(
+                                        color: c.textMuted, fontSize: 12)),
                                 Directionality(
                                   textDirection: TextDirection.ltr,
-                                  child: Text('${lan.username} / ${lan.pin}', style: TextStyle(color: c.brandPrimary, fontWeight: FontWeight.w700)),
+                                  child: Text('${lan.username} / ${lan.pin}',
+                                      style: TextStyle(
+                                          color: c.brandPrimary,
+                                          fontWeight: FontWeight.w700)),
                                 ),
                               ],
                             ),
                           ],
                           const SizedBox(height: 14),
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                            child: QrImageView(data: qrData, version: QrVersions.auto, size: 130),
-                          ),
+                          if (lan.enabled)
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16)),
+                              child: QrImageView(
+                                  data: qrData,
+                                  version: QrVersions.auto,
+                                  size: 130),
+                            ),
                           const SizedBox(height: 10),
                           TextButton.icon(
-                            onPressed: () => Clipboard.setData(ClipboardData(text: '${lan.primaryIp}:${lan.port}')),
+                            onPressed: () => Clipboard.setData(
+                                ClipboardData(text: qrData)),
                             icon: const Icon(Icons.copy_rounded, size: 16),
-                            label: const Text('کپی آدرس و پورت'),
+                            label: const Text('کپی آدرس اتصال'),
                           ),
                         ],
                       ),
@@ -163,18 +257,21 @@ void openLanShareSheet(BuildContext context, MlzAppState _, VpnController ctrl) 
   );
 }
 
-void openChangelogSheet(BuildContext context, MlzAppState _, VpnController ctrl) {
+void openChangelogSheet(
+    BuildContext context, MlzAppState _, VpnController ctrl) {
   final c = Theme.of(context).extension<MlzColors>()!;
   ctrl.checkForUpdates();
 
   showModalBottomSheet<void>(
     context: context,
     backgroundColor: c.canvas,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
     builder: (ctx) {
       return Consumer(
         builder: (ctx, ref, _) {
-          final upd = ref.watch(vpnControllerProvider).availableUpdate;
+          final liveState = ref.watch(vpnControllerProvider);
+          final upd = liveState.availableUpdate;
           return Directionality(
             textDirection: TextDirection.rtl,
             child: SafeArea(
@@ -184,7 +281,23 @@ void openChangelogSheet(BuildContext context, MlzAppState _, VpnController ctrl)
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('به‌روزرسانی و تغییرات (GitHub Releases)', style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
+                    Text('به‌روزرسانی و تغییرات (GitHub Releases)',
+                        style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800)),
+                    if (liveState.errorMessageFA != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        liveState.errorMessageFA!,
+                        style: TextStyle(color: c.error, fontSize: 12),
+                      ),
+                    ],
+                    if (liveState.updateChecking)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
                     const SizedBox(height: 10),
                     SpatialGlassCard(
                       padding: const EdgeInsets.all(14),
@@ -192,26 +305,46 @@ void openChangelogSheet(BuildContext context, MlzAppState _, VpnController ctrl)
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            upd != null && upd.updateAvailable ? 'نسخه جدید ${upd.version} آماده است!' : 'نسخه فعلی ۱.۰.۰ (به‌روز است)',
-                            style: TextStyle(color: c.brandPrimary, fontSize: 14, fontWeight: FontWeight.w800),
+                            upd != null && upd.updateAvailable
+                                ? 'نسخه جدید ${upd.version} آماده است!'
+                                : 'نسخه فعلی ${liveState.appVersion} (به‌روز است)',
+                            style: TextStyle(
+                                color: c.brandPrimary,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800),
                           ),
                           const SizedBox(height: 8),
                           Text(
                             upd != null && upd.changelogFA.isNotEmpty
-                                ? upd.changelogFA.map((line) => '• $line').join('\n')
+                                ? upd.changelogFA
+                                    .map((line) => '• $line')
+                                    .join('\n')
                                 : '• هسته ترکیبی sing-box + Xray-core + پکیج کامل سایدکارها\n'
-                                  '• تست Real Delay واقعی و مسیریابی مستقیم سایت‌های .ir\n'
-                                  '• به‌روزرسانی خودکار ۵ دقیقه‌ای با تایید امضای Ed25519',
-                            style: TextStyle(color: c.textMuted, fontSize: 12, height: 1.7),
+                                    '• تست Real Delay واقعی و مسیریابی مستقیم سایت‌های .ir\n'
+                                    '• به‌روزرسانی خودکار ۵ دقیقه‌ای با تایید امضای Ed25519',
+                            style: TextStyle(
+                                color: c.textMuted, fontSize: 12, height: 1.7),
                           ),
                           if (upd != null && upd.updateAvailable) ...[
                             const SizedBox(height: 12),
                             SizedBox(
                               width: double.infinity,
                               child: FilledButton.icon(
-                                onPressed: ctrl.downloadAndInstallUpdate,
-                                icon: const Icon(Icons.download_rounded, size: 18),
-                                label: const Text('دانلود امن و نصب نسخه جدید'),
+                                onPressed: liveState.updateDownloading
+                                    ? null
+                                    : ctrl.downloadAndInstallUpdate,
+                                icon: liveState.updateDownloading
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.download_rounded,
+                                        size: 18),
+                                label: Text(liveState.updateDownloading
+                                    ? 'در حال دانلود و بررسی امضا...'
+                                    : 'دانلود امن و نصب نسخه جدید'),
                               ),
                             ),
                           ],

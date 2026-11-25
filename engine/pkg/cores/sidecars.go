@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -105,13 +106,13 @@ func AllInCatalog() map[model.CoreKind]SidecarDescriptor {
 
 // Manager tracks active sidecar instances and resolves their executable or embedded paths.
 type Manager struct {
-	mu           sync.Mutex
-	cacheDir     string
-	androidLib   string
-	catalog      map[model.CoreKind]SidecarDescriptor
-	active       map[model.CoreKind]SidecarInstance
-	httpClient   *http.Client
-	isElevated   bool
+	mu         sync.Mutex
+	cacheDir   string
+	androidLib string
+	catalog    map[model.CoreKind]SidecarDescriptor
+	active     map[model.CoreKind]SidecarInstance
+	httpClient *http.Client
+	isElevated bool
 }
 
 // NewManager initializes a modular sidecar manager.
@@ -253,6 +254,19 @@ func AllocateLoopbackPort() (string, error) {
 	addr := ln.Addr().String()
 	_ = ln.Close()
 	return addr, nil
+}
+
+// AllocateLoopbackPortInt is the numeric variant used by generated configs.
+func AllocateLoopbackPortInt() (int, error) {
+	addr, err := AllocateLoopbackPort()
+	if err != nil {
+		return 0, err
+	}
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(portStr)
 }
 
 // RandomCredential generates a short random token for local loopback SOCKS5 auth.

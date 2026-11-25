@@ -5,17 +5,24 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
-import java.io.File
-import java.lang.reflect.Proxy
+import org.json.JSONObject
 
 /**
  * Foreground VpnService hosting the gomobile Go orchestrator (mlz-core.aar).
- * Passes the TUN file descriptor and VpnService.protect(fd) callback to Go
- * so sing-box, Xray-core, and All-In sidecars operate without routing loops.
+ * Passes the TUN file descriptor and VpnService.protect(fd) callback to Go so
+ * sing-box/Xray can operate without routing loops.
+ *
+ * If the native core is absent or refuses to connect, the service closes the
+ * TUN descriptor and reports a Persian error. It never marks itself connected
+ * while traffic would be blackholed.
  */
 class MlzVpnService : VpnService() {
 
@@ -28,9 +35,18 @@ class MlzVpnService : VpnService() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        @Volatile
+        var lastError: String? = null
+            private set
+
+        @Volatile
+        var isStarting: Boolean = false
+            private set
     }
 
     private var tunInterface: ParcelFileDescriptor? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -45,42 +61,83 @@ class MlzVpnService : VpnService() {
                 startTunnel(engineMode, countryCode, batterySaver)
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startTunnel(engineMode: String, countryCode: String, batterySaver: Boolean) {
+        if (isStarting || isRunning) return
+        isStarting = true
         ensureNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification("MLZ VPN متصل و امن است"))
+        startForeground(NOTIF_ID, buildNotification("در حال آماده‌سازی هسته..."))
+        if (!MlzCoreBridge.available()) {
+            failClosed("هسته بومی اندروید (mlz-core.aar) در این بسته وجود ندارد؛ اتصال به‌صورت امن مسدود شد.")
+            return
+        }
 
-        if (tunInterface == null) {
-            val builder = Builder()
-                .setSession("MLZ VPN")
-                .setMtu(1360)
-                .addAddress("172.19.0.1", 30)
-                .addRoute("0.0.0.0", 0)
-                .addDnsServer("172.19.0.2")
-
+        Thread {
             try {
-                builder.addDisallowedApplication(packageName)
-            } catch (_: Exception) {
+                if (tunInterface == null) {
+                    tunInterface = Builder()
+                        .setSession("MLZ VPN")
+                        .setMtu(1360)
+                        .addAddress("172.19.0.1", 30)
+                        .addAddress("fdfe:dcba:9876::1", 126)
+                        .addRoute("0.0.0.0", 0)
+                        // IPv6 is routed into the tunnel so it cannot leak around
+                        // the IPv4-only dataplane; apps fall back to IPv4.
+                        .addRoute("::", 0)
+                        .addDnsServer("172.19.0.2")
+                        .apply {
+                            try {
+                                addDisallowedApplication(packageName)
+                            } catch (_: Exception) {
+                            }
+                        }
+                        .establish()
+                }
+
+                val fd = tunInterface?.fd ?: -1
+                if (fd < 0) {
+                    throw IllegalStateException("ساخت رابط TUN توسط سیستم‌عامل رد شد.")
+                }
+
+                MlzCoreBridge.init(this, fd)
+                val rawStatus = MlzCoreBridge.connect(engineMode, countryCode, batterySaver)
+                val status = JSONObject(rawStatus)
+                val error = status.optString("error").ifBlank {
+                    status.optString("error_message_fa")
+                }
+                if (error.isNotBlank()) {
+                    throw IllegalStateException(error)
+                }
+                if (status.optString("state") != "connected") {
+                    throw IllegalStateException("هسته به وضعیت متصل نرسید.")
+                }
+
+                isRunning = true
+                lastError = null
+                updateNotification("MLZ VPN متصل و امن است")
+                startNetworkMonitor()
+            } catch (e: Throwable) {
+                failClosed(e.message ?: "راه‌اندازی هسته اندروید ناموفق بود.")
+            } finally {
+                isStarting = false
             }
-
-            tunInterface = builder.establish()
-        }
-
-        val fd = tunInterface?.fd ?: -1
-        if (fd >= 0) {
-            invokeGoMobileStart(fd, engineMode, countryCode, batterySaver)
-            isRunning = true
-        }
+        }.start()
     }
 
-    private fun stopTunnel() {
+    private fun failClosed(message: String) {
+        stopNetworkMonitor()
         isRunning = false
+        isStarting = false
+        lastError = message
         try {
-            invokeGoMobileDisconnect()
+            MlzCoreBridge.disconnect()
+        } catch (_: Throwable) {
+        }
+        try {
             tunInterface?.close()
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
         } finally {
             tunInterface = null
         }
@@ -93,57 +150,62 @@ class MlzVpnService : VpnService() {
         stopSelf()
     }
 
-    private fun invokeGoMobileStart(tunFd: Int, engineMode: String, countryCode: String, batterySaver: Boolean) {
+    private fun stopTunnel() {
+        stopNetworkMonitor()
+        isRunning = false
+        isStarting = false
         try {
-            val mobileClass = Class.forName("mobile.Mobile")
-            val protectorClass = Class.forName("mobile.SocketProtector")
-            val protector = Proxy.newProxyInstance(
-                protectorClass.classLoader,
-                arrayOf(protectorClass)
-            ) { _, method, args ->
-                if (method.name == "protect" && args != null && args.isNotEmpty()) {
-                    protect((args[0] as Number).toInt())
-                } else {
-                    false
-                }
+            MlzCoreBridge.disconnect()
+        } catch (_: Throwable) {
+        }
+        try {
+            tunInterface?.close()
+        } catch (_: Throwable) {
+        } finally {
+            tunInterface = null
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
+    }
+
+    private fun startNetworkMonitor() {
+        if (networkCallback != null) return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                MlzCoreBridge.updateNetwork(this@MlzVpnService)
             }
 
-            val rulesDir = File(filesDir, "rules").apply { mkdirs() }.absolutePath
-            val initMethod = mobileClass.getMethod(
-                "init",
-                String::class.java,
-                String::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType,
-                protectorClass
-            )
-            initMethod.invoke(
-                null,
-                cacheDir.absolutePath,
-                rulesDir,
-                applicationInfo.nativeLibraryDir,
-                tunFd,
-                protector
-            )
+            override fun onLost(network: Network) {
+                MlzCoreBridge.updateNetwork(this@MlzVpnService)
+            }
 
-            val connectMethod = mobileClass.getMethod(
-                "connect",
-                String::class.java,
-                String::class.java,
-                Boolean::class.javaPrimitiveType
-            )
-            connectMethod.invoke(null, engineMode, countryCode, batterySaver)
-        } catch (_: ClassNotFoundException) {
-            // mlz-core.aar has not been bundled into app/android/app/libs yet.
-        } catch (_: Exception) {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                MlzCoreBridge.updateNetwork(this@MlzVpnService)
+            }
+        }
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            getSystemService(ConnectivityManager::class.java)
+                .registerNetworkCallback(request, callback)
+            networkCallback = callback
+        } catch (_: Throwable) {
+            networkCallback = null
         }
     }
 
-    private fun invokeGoMobileDisconnect() {
+    private fun stopNetworkMonitor() {
+        val callback = networkCallback ?: return
+        networkCallback = null
         try {
-            val mobileClass = Class.forName("mobile.Mobile")
-            mobileClass.getMethod("disconnect").invoke(null)
-        } catch (_: Exception) {
+            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback)
+        } catch (_: Throwable) {
         }
     }
 
@@ -157,6 +219,11 @@ class MlzVpnService : VpnService() {
             )
             mgr.createNotificationChannel(ch)
         }
+    }
+
+    private fun updateNotification(text: String) {
+        val mgr = getSystemService(NotificationManager::class.java)
+        mgr.notify(NOTIF_ID, buildNotification(text))
     }
 
     private fun buildNotification(text: String): Notification {
@@ -178,5 +245,15 @@ class MlzVpnService : VpnService() {
     override fun onRevoke() {
         stopTunnel()
         super.onRevoke()
+    }
+
+    override fun onDestroy() {
+        stopNetworkMonitor()
+        // Even a service destroyed mid-start must tear down the Go dataplane, or
+        // the next Connect could reuse a half-initialized orchestrator.
+        if (isRunning || isStarting) {
+            stopTunnel()
+        }
+        super.onDestroy()
     }
 }

@@ -181,26 +181,12 @@ func RunIPHealthCheck(ctx context.Context, proxyHTTPPort int) (model.IPTestResul
 		client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	}
 
-	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ipinfo.io/json", nil)
+	info, fetchDuration, err := fetchPublicIPInfo(ctx, client)
 	if err != nil {
 		return model.IPTestResult{}, err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return model.IPTestResult{}, err
-	}
-	defer resp.Body.Close()
 
-	var info struct {
-		IP      string `json:"ip"`
-		Country string `json:"country"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 16*1024)).Decode(&info); err != nil {
-		return model.IPTestResult{}, err
-	}
-
-	delayMS := int(time.Since(start).Milliseconds())
+	delayMS := int(fetchDuration.Milliseconds())
 	iranOK := checkIranDirect(ctx)
 
 	return model.IPTestResult{
@@ -212,6 +198,80 @@ func RunIPHealthCheck(ctx context.Context, proxyHTTPPort int) (model.IPTestResul
 		IranDirectOK: iranOK,
 		TestedAt:     time.Now().Unix(),
 	}, nil
+}
+
+func fetchPublicIPInfo(ctx context.Context, client *http.Client) (struct {
+	IP      string
+	Country string
+}, time.Duration, error) {
+	type result = struct {
+		IP      string
+		Country string
+	}
+	// Several independent endpoints are tried because ipinfo.io and ipify are
+	// intermittently blocked from Iranian ISPs and from some exit nodes.
+	endpoints := []string{
+		"https://ipwho.is/",
+		"https://api.myip.com",
+		"https://ipapi.co/json/",
+		"https://ipinfo.io/json",
+		"https://api.ipify.org?format=json",
+		"https://ifconfig.me/all.json",
+	}
+	var lastErr error
+	for _, endpoint := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "MLZ-VPN/1.0")
+		requestStart := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("IP endpoint %s returned HTTP %d", endpoint, resp.StatusCode)
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(body, &raw); err != nil {
+			lastErr = err
+			continue
+		}
+		out := result{}
+		for _, key := range []string{"ip", "ip_addr", "query"} {
+			if value, ok := raw[key].(string); ok && strings.TrimSpace(value) != "" {
+				out.IP = strings.TrimSpace(value)
+				break
+			}
+		}
+		for _, key := range []string{"country_code", "cc", "country"} {
+			if value, ok := raw[key].(string); ok {
+				candidate := strings.ToUpper(strings.TrimSpace(value))
+				if len(candidate) == 2 {
+					out.Country = candidate
+					break
+				}
+			}
+		}
+		if out.IP != "" {
+			return out, time.Since(requestStart), nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no public IP endpoint returned a usable response")
+	}
+	return result{}, 0, lastErr
 }
 
 func checkIranDirect(ctx context.Context) bool {

@@ -1,4 +1,4 @@
-name: Release MLZ VPN (Windows & Android)
+name: Release MLZ VPN
 
 on:
   push:
@@ -7,170 +7,283 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag name (e.g. v1.0.0)'
-        required: false
-        default: 'v1.0.0'
+        description: 'Release tag name (must match pubspec, e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.1'
 
 permissions:
   contents: write
+
+env:
+  SING_BOX_VERSION: '1.14.4'
+  XRAY_VERSION: 'v26.11.9'
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
+
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
+      - name: Read and validate version from pubspec
+        shell: pwsh
+        run: |
+          $line = (Select-String -Path app\pubspec.yaml -Pattern '^version:\s*(.+)$').Matches.Groups[1].Value.Trim()
+          $parts = $line -split '\+'
+          $ver = $parts[0]
+          $build = if ($parts.Length -gt 1) { $parts[1] } else { '1' }
+          if ($ver -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid pubspec version: $line" }
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          if ($tag -ne "v$ver") { throw "Tag $tag does not match app/pubspec.yaml version v$ver" }
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "APP_BUILD=$build" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Enable Windows Developer Mode (Flutter plugin symlinks)
+        shell: pwsh
+        run: |
+          New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Force | Out-Null
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWORD -Force | Out-Null
+          flutter config --enable-windows-desktop
+
       - name: Build Windows mlz-engine.exe
         working-directory: engine
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          go build -ldflags="-s -w -H=windowsgui" -o bin\mlz-engine.exe .\cmd\mlz-engine
+          go build -trimpath -ldflags="-s -w -H=windowsgui -X main.version=$env:APP_VERSION -X main.buildNumber=$env:APP_BUILD" -o bin\mlz-engine.exe .\cmd\mlz-engine
 
       - name: Build Windows Flutter Release
         working-directory: app
+        shell: pwsh
         run: |
           flutter pub get
           flutter build windows --release
 
-      - name: Bundle mlz-engine, sing-box, xray-core & Iran .srs Rules
+      - name: Bundle pinned cores and Iran rules
         shell: pwsh
         run: |
           $relDir = "app\build\windows\x64\runner\Release"
           $coresDir = "$relDir\cores"
           $rulesDir = "$relDir\rules"
           New-Item -ItemType Directory -Force -Path $coresDir, $rulesDir | Out-Null
-
           Copy-Item "engine\bin\mlz-engine.exe" "$relDir\mlz-engine.exe" -Force
 
-          $sbRel = Invoke-RestMethod "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
-          $sbAsset = $sbRel.assets | Where-Object { $_.name -match "windows-amd64\.zip$" } | Select-Object -First 1
-          if ($sbAsset) {
-            Invoke-WebRequest -Uri $sbAsset.browser_download_url -OutFile "$env:TEMP\sb.zip"
-            Expand-Archive "$env:TEMP\sb.zip" -DestinationPath "$env:TEMP\sb" -Force
-            Get-ChildItem "$env:TEMP\sb" -Recurse -Filter "sing-box.exe" | Select-Object -First 1 | Copy-Item -Destination "$coresDir\sing-box.exe" -Force
+          $sbUrl = "https://github.com/SagerNet/sing-box/releases/download/v$env:SING_BOX_VERSION/sing-box-$env:SING_BOX_VERSION-windows-amd64.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri $sbUrl -OutFile "$env:RUNNER_TEMP\sing-box.zip"
+          Expand-Archive "$env:RUNNER_TEMP\sing-box.zip" -DestinationPath "$env:RUNNER_TEMP\sing-box" -Force
+          $sb = Get-ChildItem "$env:RUNNER_TEMP\sing-box" -Recurse -Filter "sing-box.exe" | Select-Object -First 1
+          if (-not $sb) { throw "sing-box.exe missing from $sbUrl" }
+          Copy-Item $sb.FullName "$coresDir\sing-box.exe" -Force
+
+          $xrUrl = "https://github.com/XTLS/Xray-core/releases/download/$env:XRAY_VERSION/Xray-windows-64.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri $xrUrl -OutFile "$env:RUNNER_TEMP\xray.zip"
+          $dgst = (Invoke-WebRequest -UseBasicParsing -Uri "$xrUrl.dgst").Content
+          if ($dgst -is [byte[]]) { $dgst = [System.Text.Encoding]::UTF8.GetString($dgst) }
+          $expected = ($dgst -split "\r?\n" | Where-Object { $_ -match '^SHA2-256=' } | Select-Object -First 1) -replace '^SHA2-256=\s*', ''
+          $actual = (Get-FileHash "$env:RUNNER_TEMP\xray.zip" -Algorithm SHA256).Hash.ToLower()
+          if (-not $expected -or $actual -ne $expected.ToLower()) { throw "Xray checksum mismatch" }
+          Expand-Archive "$env:RUNNER_TEMP\xray.zip" -DestinationPath "$env:RUNNER_TEMP\xray" -Force
+          $xr = Get-ChildItem "$env:RUNNER_TEMP\xray" -Recurse -Filter "xray.exe" | Select-Object -First 1
+          if (-not $xr) { throw "xray.exe missing from $xrUrl" }
+          Copy-Item $xr.FullName "$coresDir\xray.exe" -Force
+
+          Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-ir.srs" -OutFile "$rulesDir\geosite-ir.srs"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-ir.srs" -OutFile "$rulesDir\geoip-ir.srs"
+          Get-ChildItem $coresDir, $rulesDir | ForEach-Object { if ($_.Length -le 0) { throw "Empty artifact: $($_.FullName)" } }
+
+          New-Item -ItemType Directory -Force -Path "dist\windows-x64" | Out-Null
+          Compress-Archive -Path "$relDir\*" -DestinationPath "dist\windows-x64\mlz-vpn-windows-x64.zip" -Force
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $hasNsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+          if (-not $hasNsis -and -not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
+            choco install nsis --no-progress -y
           }
 
-          $xrRel = Invoke-RestMethod "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-          $xrAsset = $xrRel.assets | Where-Object { $_.name -match "Xray-windows-64\.zip$" } | Select-Object -First 1
-          if ($xrAsset) {
-            Invoke-WebRequest -Uri $xrAsset.browser_download_url -OutFile "$env:TEMP\xray.zip"
-            Expand-Archive "$env:TEMP\xray.zip" -DestinationPath "$env:TEMP\xray" -Force
-            Get-ChildItem "$env:TEMP\xray" -Recurse -Filter "xray.exe" | Select-Object -First 1 | Copy-Item -Destination "$coresDir\xray.exe" -Force
-          }
-
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geosite-ir.srs" -OutFile "$rulesDir\geosite-ir.srs"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Chocolate4U/Iran-sing-box-rules/rule-set/geoip-ir.srs" -OutFile "$rulesDir\geoip-ir.srs"
-
-          Compress-Archive -Path "$relDir\*" -DestinationPath "mlz-vpn-windows-x64.zip" -Force
+      - name: Build Windows setup installer
+        shell: pwsh
+        run: |
+          .\scripts\build_windows_installer.ps1 -ReleaseDir "app\build\windows\x64\runner\Release" -OutputPath "dist\windows-x64\mlz-vpn-windows-x64-setup.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: mlz-vpn-windows-x64.zip
+          path: |
+            dist/windows-x64/mlz-vpn-windows-x64.zip
+            dist/windows-x64/mlz-vpn-windows-x64-setup.exe
 
   build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
       - uses: android-actions/setup-android@v3
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install 'ndk;28.2.13676358'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
       - uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Install Android NDK & Compile mlz-core.aar via gomobile
+      - name: Install gomobile fork
+        run: |
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          "$(go env GOPATH)/bin/gomobile" init
+
+      - name: Build Android mlz-core AAR
         working-directory: engine
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "ndk;27.0.12077973"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          export PATH="$PATH:$(go env GOPATH)/bin"
-          gomobile init
-          go get golang.org/x/mobile/bind
           mkdir -p ../app/android/app/libs
-          gomobile bind -v -androidapi 24 -target=android/arm64,android/arm,android/amd64 -o ../app/android/app/libs/mlz-core.aar ./mobile
-          go mod tidy
+          "$(go env GOPATH)/bin/gomobile" bind '-target=android/arm64,android/arm,android/amd64' -androidapi 24 \
+            -tags 'with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_clash_api,badlinkname,tfogo_checklinkname0' \
+            '-ldflags=-checklinkname=0' \
+            -o ../app/android/app/libs/mlz-core.aar ./mobile
+          test -s ../app/android/app/libs/mlz-core.aar
 
-      - name: Build Android Split & Universal APKs
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo '::error::Android signing secrets are missing; refusing to publish a debug-signed APK.'
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/android/keystore.jks
+          cat > app/android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=../keystore.jks
+          EOF
+
+      - name: Build Android APKs
         working-directory: app
         run: |
           flutter pub get
-          flutter build apk --release --split-per-abi
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../mlz-vpn-android-arm64-v8a.apk
-          cp build/app/outputs/flutter-apk/app-release.apk ../mlz-vpn-android-universal.apk
+          flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64,android-x64
+          mkdir -p ../dist/android
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../dist/android/mlz-vpn-android-arm64.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk ../dist/android/mlz-vpn-android-armv7.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk ../dist/android/mlz-vpn-android-x86_64.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: android-apks
-          path: |
-            mlz-vpn-android-arm64-v8a.apk
-            mlz-vpn-android-universal.apk
+          path: dist/android/*.apk
 
   publish-release:
     needs: [ build-windows, build-android ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          name: windows-x64
+          path: dist/windows-x64
 
-      - name: Generate SHA-256 Checksums & version.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apks
+          path: dist/android
+
+      - name: Read version from pubspec
+        run: |
+          LINE=$(grep -E '^version:' app/pubspec.yaml | head -n1 | sed -E 's/version:[[:space:]]*//')
+          VER=${LINE%%+*}
+          BUILD=${LINE#*+}
+          if [ "$BUILD" = "$LINE" ]; then BUILD=1; fi
+          TAG='${{ github.event.inputs.tag || github.ref_name }}'
+          if [ "$TAG" != "v$VER" ]; then echo "Tag $TAG does not match pubspec v$VER"; exit 1; fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Generate and sign version.json
+        env:
+          MLZ_FEED_PRIVKEY: ${{ secrets.MLZ_FEED_PRIVKEY }}
         run: |
           WIN_SHA=$(sha256sum dist/windows-x64/mlz-vpn-windows-x64.zip | awk '{print $1}')
-          ARM_SHA=$(sha256sum dist/android-apks/mlz-vpn-android-arm64-v8a.apk | awk '{print $1}')
-          UNI_SHA=$(sha256sum dist/android-apks/mlz-vpn-android-universal.apk | awk '{print $1}')
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if [[ "$TAG" == "main" ]]; then TAG="v1.0.0"; fi
-          VER="${TAG#v}"
-          cat <<EOF > dist/version.json
+          SETUP_SHA=$(sha256sum dist/windows-x64/mlz-vpn-windows-x64-setup.exe | awk '{print $1}')
+          ARM64_SHA=$(sha256sum dist/android/mlz-vpn-android-arm64.apk | awk '{print $1}')
+          ARMV7_SHA=$(sha256sum dist/android/mlz-vpn-android-armv7.apk | awk '{print $1}')
+          X64_SHA=$(sha256sum dist/android/mlz-vpn-android-x86_64.apk | awk '{print $1}')
+          cat > dist/version.json <<EOF
           {
             "version": "$VER",
-            "build_number": ${GITHUB_RUN_NUMBER},
+            "build_number": $BUILD,
             "min_supported_version": "1.0.0",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "changelog_fa": [
-              "انتشار نسخه $VER برای ویندوز و اندروید",
-              "بهبود موتور ترکیبی sing-box + Xray-core و سایدکارهای All-In"
+              "به‌روزرسانی مستقیم از داخل برنامه: اعلام نسخه، دانلود با بررسی SHA-256 و نصب APK/Setup",
+              "رفع خطای Android netlink و پایدارسازی اتصال TUN روی اندروید ۱۰ و بالاتر",
+              "تست واقعی IP با چند منبع جایگزین و محاسبهٔ تأخیر فقط از مسیر موفق",
+              "افزودن بستهٔ x86_64 برای شبیه‌ساز و Chromebook",
+              "موتور ترکیبی sing-box $SING_BOX_VERSION و Xray-core $XRAY_VERSION با مسیریابی هوشمند ایران"
             ],
             "assets": {
               "windows_x64": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/mlz-vpn-windows-x64.zip",
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/mlz-vpn-windows-x64.zip",
                 "sha256": "$WIN_SHA"
               },
-              "android_arm64": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/mlz-vpn-android-arm64-v8a.apk",
-                "sha256": "$ARM_SHA"
+              "windows_x64_setup": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/mlz-vpn-windows-x64-setup.exe",
+                "sha256": "$SETUP_SHA"
               },
-              "android_universal": {
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/mlz-vpn-android-universal.apk",
-                "sha256": "$UNI_SHA"
+              "android_arm64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/mlz-vpn-android-arm64.apk",
+                "sha256": "$ARM64_SHA"
+              },
+              "android_armv7": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/mlz-vpn-android-armv7.apk",
+                "sha256": "$ARMV7_SHA"
+              },
+              "android_x86_64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/mlz-vpn-android-x86_64.apk",
+                "sha256": "$X64_SHA"
               }
             }
           }
           EOF
+          (cd feeds && go run ./cmd/signmanifest -file ../dist/version.json)
+          python3 -m json.tool dist/version.json > /dev/null
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ env.TAG }}
           generate_release_notes: true
           files: |
             dist/windows-x64/mlz-vpn-windows-x64.zip
-            dist/android-apks/mlz-vpn-android-arm64-v8a.apk
-            dist/android-apks/mlz-vpn-android-universal.apk
+            dist/windows-x64/mlz-vpn-windows-x64-setup.exe
+            dist/android/mlz-vpn-android-arm64.apk
+            dist/android/mlz-vpn-android-armv7.apk
+            dist/android/mlz-vpn-android-x86_64.apk
             dist/version.json
