@@ -1,7 +1,7 @@
 {
   "schema": "mlz.feed.v1",
-  "sequence": 1795648034,
-  "generated_at": "2026-11-25T23:07:14.554631085Z",
+  "sequence": 1795649985,
+  "generated_at": "2026-11-25T23:39:45.736276745Z",
   "ttl_seconds": 300,
   "mirrors": [
     "https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
@@ -969,5 +969,5 @@
       "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4enc1ajlo@54.36.174.134:443#🇵🇱139902 | ⚡️Telegram = t.me/SOSkeyNET"
     }
   ],
-  "signature": "lBsJI5bJ6NgqBtKcF67tPFsuIYduAkUfZ01DhBmlFIDPYXC1I86l3HaJ+/ETKR8Qi7oEOplkTDSiqBfKJ1c4CQ=="
+  "signature": "mAqBMp6ewfuneCNMg40H43n55OpCixQ3tZI9AEqJHAyC09Jyay+4cy6zOSDkhvaNC2uzEeJQrdMqfgdcuS1cBQ=="
 }
