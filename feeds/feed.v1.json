@@ -1,7 +1,7 @@
 {
   "schema": "mlz.feed.v1",
-  "sequence": 1795635977,
-  "generated_at": "2026-11-25T19:46:17.508062466Z",
+  "sequence": 1795648034,
+  "generated_at": "2026-11-25T23:07:14.554631085Z",
   "ttl_seconds": 300,
   "mirrors": [
     "https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
@@ -862,7 +862,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://XpnTeam-2@167.82.64.7:443?mode=auto\u0026pcs=cd6e838b9bfe31cab8b3d5c858b0d6223fe84ece236c1fdb281be93c302e1e6e\u0026path=/\u0026security=tls\u0026encryption=none\u0026extra={\"mode\":\"auto\",\"xPaddingBytes\":\"100-1000\"}\u0026insecure=0\u0026host=Wssmx.global.ssl.fastly.net\u0026type=xhttp\u0026allowInsecure=0\u0026sni=cdn.akamai.steamstatic.com#🇺🇸230756 | ⚡️Telegram = t.me/SOSkeyNET"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo0SXhSZUhPdWNLaXd2b3Nqb1JYbExMcHUyMFBzby1yWg@13.140.83.153:1080#🇫🇮230733 | ⚡️Telegram = t.me/SOSkeyNET"
     },
     {
       "id": "node-108",
@@ -870,7 +870,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo0SXhSZUhPdWNLaXd2b3Nqb1JYbExMcHUyMFBzby1yWg@13.140.83.153:1080#🇫🇮230733 | ⚡️Telegram = t.me/SOSkeyNET"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo0YTJyZml4b3BoZGpmZmE4S1ZBNEFh@193.29.139.234:8080#@AZARBAYJAB1"
     },
     {
       "id": "node-109",
@@ -878,7 +878,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo0YTJyZml4b3BoZGpmZmE4S1ZBNEFh@193.29.139.234:8080#@AZARBAYJAB1"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo1NzVoaW9wcTJoMjh5YW82@15.235.121.109:8080#@IRAN_V2RAY1 🎖️"
     },
     {
       "id": "node-110",
@@ -886,7 +886,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo1NzVoaW9wcTJoMjh5YW82@15.235.121.109:8080#@IRAN_V2RAY1 🎖️"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo1NzVoaW9wcTJoMjh5YW82@leviko-ca4857.shopingggg.ir:8080#🇧🇴AZARBAYJB1"
     },
     {
       "id": "node-111",
@@ -894,7 +894,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo1NzVoaW9wcTJoMjh5YW82@leviko-ca4857.shopingggg.ir:8080#🇧🇴AZARBAYJB1"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@13.212.45.108:8443#🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬"
     },
     {
       "id": "node-112",
@@ -902,7 +902,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@13.212.45.108:8443#🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.36.92.106:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
     },
     {
       "id": "node-113",
@@ -910,7 +910,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.36.92.106:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.38.213.49:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
     },
     {
       "id": "node-114",
@@ -918,7 +918,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.38.213.49:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.39.235.71:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
     },
     {
       "id": "node-115",
@@ -926,7 +926,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@3.39.235.71:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@43.201.46.216:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
     },
     {
       "id": "node-116",
@@ -934,7 +934,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo3ZTY4ZTMyZi04MDE1LTRmMzctOTA4Mi03MGU4YjBiNTgwNDM@43.201.46.216:8443#🇰🇷 Join+Telegram:@Farah_VPN 🇰🇷"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4YWYyMjZiNzcyNmY0ZDRjYjVjNzJmZTNiNTcwNTBmMA==@3.75.179.86:443#@v2rayng3"
     },
     {
       "id": "node-117",
@@ -942,7 +942,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4YWYyMjZiNzcyNmY0ZDRjYjVjNzJmZTNiNTcwNTBmMA==@3.75.179.86:443#@v2rayng3"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4ZTRjM2lzb3Z3OHBqbmc0@57.131.21.102:8080#@ICV2RAY"
     },
     {
       "id": "node-118",
@@ -950,7 +950,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4ZTRjM2lzb3Z3OHBqbmc0@57.131.21.102:8080#@ICV2RAY"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4cm1nbWhqY2w2NDR2ZG5o@54.37.240.40:8080#@ICV2RAY"
     },
     {
       "id": "node-119",
@@ -958,7 +958,7 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4cm1nbWhqY2w2NDR2ZG5o@54.37.240.40:8080#@ICV2RAY"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4dG1udlg1ell1V0dWSURQMmpnbFp3@5.78.51.123:1080#@fastkanfig 5"
     },
     {
       "id": "node-120",
@@ -966,8 +966,8 @@
       "protocol": "shadowsocks",
       "region": "",
       "weight": 0.85,
-      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4dG1udlg1ell1V0dWSURQMmpnbFp3@5.78.51.123:1080#@fastkanfig 5"
+      "config_uri": "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo4enc1ajlo@54.36.174.134:443#🇵🇱139902 | ⚡️Telegram = t.me/SOSkeyNET"
     }
   ],
-  "signature": "7I4V63shy34NeJp/T6haJtfGjI0LtX+M1TFLXx5PPb3t5xOAHbDR4Gj5L2C0odTFZRmyJpLdciiqpQGyHfA9CA=="
+  "signature": "lBsJI5bJ6NgqBtKcF67tPFsuIYduAkUfZ01DhBmlFIDPYXC1I86l3HaJ+/ETKR8Qi7oEOplkTDSiqBfKJ1c4CQ=="
 }
