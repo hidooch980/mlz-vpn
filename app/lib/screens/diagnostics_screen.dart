@@ -96,37 +96,40 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
           ],
         ),
       ),
-      body: Directionality(
-        textDirection: TextDirection.rtl,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 640),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-              children: [
-                if (state.errorMessageFA != null && !busy) ...[
-                  _ErrorBanner(
-                      message: 'آخرین خطای اتصال: ${state.errorMessageFA!}',
-                      c: c),
-                  const SizedBox(height: 10),
+      body: SafeArea(
+        top: false,
+        child: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                children: [
+                  if (state.errorMessageFA != null && !busy) ...[
+                    _ErrorBanner(
+                        message: 'آخرین خطای اتصال: ${state.errorMessageFA!}',
+                        c: c),
+                    const SizedBox(height: 10),
+                  ],
+                  if (report == null && busy)
+                    _ScanningPanel(stage: _stages[_stage], c: c)
+                  else if (report == null)
+                    _EmptyPanel(c: c, ctrl: ctrl, error: state.errorMessageFA)
+                  else
+                    _ReportBody(
+                      report: report,
+                      c: c,
+                      busy: busy,
+                      healing: state.diagnosticsHealing,
+                      stage: _stages[_stage],
+                      onRerun: busy ? null : ctrl.runDiagnostics,
+                      onHeal: busy ? null : ctrl.autoHealDiagnostics,
+                      autoWatch: _autoWatch,
+                      onAutoWatch: _toggleAutoWatch,
+                    ),
                 ],
-                if (report == null && busy)
-                  _ScanningPanel(stage: _stages[_stage], c: c)
-                else if (report == null)
-                  _EmptyPanel(c: c, ctrl: ctrl, error: state.errorMessageFA)
-                else
-                  _ReportBody(
-                    report: report,
-                    c: c,
-                    busy: busy,
-                    healing: state.diagnosticsHealing,
-                    stage: _stages[_stage],
-                    onRerun: busy ? null : ctrl.runDiagnostics,
-                    onHeal: busy ? null : ctrl.autoHealDiagnostics,
-                    autoWatch: _autoWatch,
-                    onAutoWatch: _toggleAutoWatch,
-                  ),
-              ],
+              ),
             ),
           ),
         ),
