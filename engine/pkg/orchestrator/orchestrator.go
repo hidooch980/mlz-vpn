@@ -291,8 +291,8 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 	}
 
 	attempts := ranked
-	if len(attempts) > 3 {
-		attempts = attempts[:3]
+	if len(attempts) > 4 {
+		attempts = attempts[:4]
 	}
 	var chosen *probe.ProbeResult
 	var lastErr error
@@ -309,6 +309,19 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 				o.stopCores()
 				continue
 			}
+			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			clashClient := cores.NewClashClient(fmt.Sprintf("http://127.0.0.1:%d", o.cfg.ClashAPIPort), o.clashSecret)
+			delay, err := clashClient.TestDelay(probeCtx, "proxy-out", probe.DefaultProbeURL, 6*time.Second)
+			if err != nil {
+				delay, err = clashClient.TestDelay(probeCtx, "proxy-out", probe.FallbackProbeURL, 6*time.Second)
+			}
+			cancel()
+			if err != nil {
+				lastErr = fmt.Errorf("server failed end-to-end health check: %w", err)
+				o.stopCores()
+				continue
+			}
+			attempts[i].RealDelayMS = delay
 		}
 		chosen = &attempts[i]
 		break

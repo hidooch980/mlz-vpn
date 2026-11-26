@@ -126,7 +126,23 @@ func BuildSingBoxConfig(opts SingBoxBuildOptions) ([]byte, error) {
 	dnsConfig := routing.BuildIranSplitDNS(proxyTag)
 	dnsConfig.Rules = filterDNSRules(dnsConfig.Rules, available)
 
-	routeRules := filterRouteRules(routing.BuildIranRouteRules(proxyTag), available)
+	routeRules := make([]any, 0, 8)
+	if opts.TunnelMode == model.TunnelModeTUN {
+		// Many public upstreams carry TCP but silently drop UDP/443. If QUIC is
+		// allowed through TUN, Chrome/Edge latch onto it and show ERR_QUIC_*
+		// without falling back. Reject QUIC on the tunnel inbound so browsers
+		// immediately use TCP; the mixed proxy inbound keeps QUIC for clients
+		// that can use it.
+		routeRules = append(routeRules, map[string]any{
+			"action":  "reject",
+			"inbound": []string{"tun-in"},
+			"network": []string{"udp"},
+			"port":    []int{443},
+		})
+	}
+	for _, rule := range filterRouteRules(routing.BuildIranRouteRules(proxyTag), available) {
+		routeRules = append(routeRules, rule)
+	}
 	route := map[string]any{
 		"final":                   proxyTag,
 		"rule_set":                ruleSets,

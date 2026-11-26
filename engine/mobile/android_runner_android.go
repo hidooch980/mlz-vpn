@@ -82,7 +82,7 @@ func (a *androidRunner) ensureServer() error {
 			WorkingPath:     cache,
 			TempPath:        cache,
 			FixAndroidStack: true,
-			AppVersion:      "1.0.1",
+			AppVersion:      "1.0.2",
 		})
 	})
 	if androidSetupErr != nil {
@@ -119,15 +119,31 @@ func (a *androidRunner) StartSingBox(_ context.Context, config []byte) error {
 	if err := a.ensureServer(); err != nil {
 		return err
 	}
-	return a.server.StartOrReloadService(string(config), &libbox.OverrideOptions{})
+	if err := a.server.StartOrReloadService(string(config), &libbox.OverrideOptions{}); err != nil {
+		// A failed start can leave the command server and its previous service
+		// holding the mixed inbound port and cache file. Tear it down so a retry
+		// starts from a clean runtime instead of failing forever with EADDRINUSE.
+		_ = a.server.CloseService()
+		a.server.Close()
+		a.server = nil
+		a.plat.releaseTunFDs()
+		return err
+	}
+	return nil
 }
 
 func (a *androidRunner) StopSingBox() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.server != nil {
+		// Close only stops the command gRPC server; CloseService releases the
+		// actual sing-box instance, inbound listeners, TUN fd and cache-file lock.
+		_ = a.server.CloseService()
 		a.server.Close()
 		a.server = nil
+	}
+	if a.plat != nil {
+		a.plat.releaseTunFDs()
 	}
 	return nil
 }
@@ -145,10 +161,12 @@ type androidPlatform struct {
 	protector SocketProtector
 	snapshot  networkSnapshot
 
-	mu          sync.Mutex
-	myTunName   string
-	interfaces  []net.Interface
-	monitorStop chan struct{}
+	mu           sync.Mutex
+	openedMu     sync.Mutex
+	openedTunFDs []int
+	myTunName    string
+	interfaces   []net.Interface
+	monitorStop  chan struct{}
 }
 
 func (p *androidPlatform) LocalDNSTransport() libbox.LocalDNSTransport { return nil }
@@ -163,11 +181,30 @@ func (p *androidPlatform) AutoDetectInterfaceControl(fd int32) error {
 }
 
 func (p *androidPlatform) OpenTun(_ libbox.TunOptions) (int32, error) {
+	// libbox duplicates the descriptor internally before handing it to the TUN
+	// stack, but it never closes the descriptor returned here. Duplicate the
+	// VpnService fd so libbox can own its copy, track our copy, and release all
+	// of them on StopSingBox. Without that release the kernel keeps tun0 alive
+	// after VpnService.stop and the next connect blackholes traffic into the
+	// stale interface.
 	fd, err := syscall.Dup(int(p.tunFD))
 	if err != nil {
 		return 0, err
 	}
+	p.openedMu.Lock()
+	p.openedTunFDs = append(p.openedTunFDs, fd)
+	p.openedMu.Unlock()
 	return int32(fd), nil
+}
+
+func (p *androidPlatform) releaseTunFDs() {
+	p.openedMu.Lock()
+	fds := p.openedTunFDs
+	p.openedTunFDs = nil
+	p.openedMu.Unlock()
+	for _, fd := range fds {
+		_ = syscall.Close(fd)
+	}
 }
 
 func (p *androidPlatform) FindConnectionOwner(int32, string, int32, string, int32) (*libbox.ConnectionOwner, error) {

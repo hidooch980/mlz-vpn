@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Release tag name (must match pubspec, e.g. v1.0.0)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.0.2'
 
 permissions:
   contents: write
@@ -245,10 +245,10 @@ jobs:
             "min_supported_version": "1.0.0",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "changelog_fa": [
-              "به‌روزرسانی مستقیم از داخل برنامه: اعلام نسخه، دانلود با بررسی SHA-256 و نصب APK/Setup",
-              "رفع خطای Android netlink و پایدارسازی اتصال TUN روی اندروید ۱۰ و بالاتر",
-              "تست واقعی IP با چند منبع جایگزین و محاسبهٔ تأخیر فقط از مسیر موفق",
-              "افزودن بستهٔ x86_64 برای شبیه‌ساز و Chromebook",
+              "رفع نشت توصیف‌گر TUN و پاک‌شدن کامل tun0 پس از قطع؛ اتصال مجدد دیگر ترافیک را به تونل مرده نمی‌فرستد",
+              "رفع خطای QUIC/ERR_QUIC_PROTOCOL_ERROR با رد هوشمند UDP/443 فقط روی TUN؛ مرورگر بی‌درنگ TCP را انتخاب می‌کند",
+              "بررسی سلامت سرتاسری گره پیش از اتصال و رد گره‌های مرده با آزمون تأخیر واقعی Clash API",
+              "به‌روزرسانی مستقیم از داخل برنامه با اعلام نسخه، دانلود، بررسی SHA-256 و نصب APK/Setup",
               "موتور ترکیبی sing-box $SING_BOX_VERSION و Xray-core $XRAY_VERSION با مسیریابی هوشمند ایران"
             ],
             "assets": {
