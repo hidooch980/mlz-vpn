@@ -49,3 +49,20 @@ func TestRankNodes(t *testing.T) {
 		t.Fatalf("expected 2 DE nodes, got %d", len(deOnly))
 	}
 }
+
+func TestCountryNameFA(t *testing.T) {
+	cases := map[string]string{
+		"IT": "ایتالیا",
+		"it": "ایتالیا",
+		"DE": "آلمان",
+		"IR": "ایران",
+		"US": "آمریکا",
+		"ZZ": "ZZ",
+		"":   "نامشخص",
+	}
+	for code, want := range cases {
+		if got := CountryNameFA(code); got != want {
+			t.Fatalf("CountryNameFA(%q) = %q, want %q", code, got, want)
+		}
+	}
+}

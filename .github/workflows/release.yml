@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Release tag name (must match pubspec, e.g. v1.0.0)'
         required: true
-        default: 'v1.0.6'
+        default: 'v1.0.7'
 
 permissions:
   contents: write
@@ -245,6 +245,7 @@ jobs:
             "min_supported_version": "1.0.0",
             "released_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "changelog_fa": [
+              "نمایش نام فارسی کشورها در کارت آی‌پی (مثل ایتالیا، اسپانیا، آلمان و ده‌ها کشور دیگر)",
               "تست آی‌پی پس از برقراری اتصال به‌صورت خودکار اجرا می‌شود و دیگر کارت آی‌پی بی‌دلیل در انتظار نمی‌ماند",
               "متن کارت آی‌پی هنگام اتصال اصلاح شد و مهلت ۲۰ ثانیه‌ای سمت اپ از قفل‌شدن صفحه جلوگیری می‌کند",
               "همهٔ خطاهای خام انگلیسی (timeout، permission، خطای موتور) به پیام فارسی روشن تبدیل می‌شوند",
