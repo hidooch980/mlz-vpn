@@ -78,8 +78,8 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 پس از تأیید پنجرهٔ VpnService، دکمهٔ اتصال را بزنید. مسیر درست با نمایش «متصل»، عبور یک صفحهٔ وب از مرورگر و تست IP مشخص می‌شود. لاگ‌های SELinux نباید باعث توقف سرویس شوند؛ snapshot شبکه در Kotlin ساخته می‌شود و Go دیگر `netlink` را روی اندروید صدا نمی‌زند.
 
 ## به‌روزرسانی داخل برنامه
-1. نسخهٔ `app/pubspec.yaml` را مثلاً به `1.0.5+105` افزایش دهید و همان عدد را در `engine/cmd/mlz-engine/main.go` و `engine/mobile/api.go` هم بگذارید.
-2. تگ `v1.0.5` را push کنید تا workflow، `version.json` امضاشده و همهٔ assetها را بسازد.
+1. نسخهٔ `app/pubspec.yaml` را مثلاً به `1.0.6+106` افزایش دهید و همان عدد را در `engine/cmd/mlz-engine/main.go` و `engine/mobile/api.go` هم بگذارید.
+2. تگ `v1.0.6` را push کنید تا workflow، `version.json` امضاشده و همهٔ assetها را بسازد.
 3. در ویندوز، برنامه فایل `windows_x64_setup` را دانلود و پس از بررسی SHA-256 اجرا می‌کند.
 4. در اندروید، برنامه asset متناظر ABI (`android_arm64`، `android_armv7` یا `android_x86_64`) را دانلود می‌کند، SHA-256 را تطبیق می‌دهد و با `FileProvider` نصب را شروع می‌کند. اگر مجوز «نصب از منابع ناشناس» داده نشده باشد، تنظیمات مربوطه باز می‌شود.
 

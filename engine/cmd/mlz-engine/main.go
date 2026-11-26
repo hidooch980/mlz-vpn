@@ -25,8 +25,8 @@ import (
 
 // version and buildNumber are overridden at build time with -ldflags -X.
 var (
-	version     = "1.0.5"
-	buildNumber = "105"
+	version     = "1.0.6"
+	buildNumber = "106"
 
 	// MLZ release signing public key (same Ed25519 identity as the signed feed).
 	updatePublicKey = "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8="

@@ -145,9 +145,16 @@ final vpnControllerProvider =
   return VpnController(EngineBridge.create());
 });
 
+/// QA-only: simulate an Iranian exit so the IP card and .ir checks can be
+/// exercised without a real Iranian node. Enable with
+/// `--dart-define=MLZ_TEST_IRAN_MOCK=true`; release builds leave it false.
+const bool kQaIranMock =
+    bool.fromEnvironment('MLZ_TEST_IRAN_MOCK', defaultValue: false);
+
 class VpnController extends StateNotifier<MlzAppState> {
   final EngineBridge _bridge;
   Timer? _pollTimer;
+  bool _ipAutoTested = false;
 
   VpnController(this._bridge) : super(const MlzAppState()) {
     _loadPrefs();
@@ -194,8 +201,11 @@ class VpnController extends StateNotifier<MlzAppState> {
       return;
     }
 
+    _ipAutoTested = false;
     state = state.copyWith(
-        connState: VpnConnectionState.connecting, errorMessageFA: null);
+        connState: VpnConnectionState.connecting,
+        errorMessageFA: null,
+        lastIpTest: null);
     try {
       final snap = await _bridge.connect(
         tunnelMode: state.tunnelMode,
@@ -206,9 +216,11 @@ class VpnController extends StateNotifier<MlzAppState> {
       _applySnapshot(snap);
       _startTelemetryPoll();
     } catch (e) {
+      _ipAutoTested = false;
       state = state.copyWith(
         connState: VpnConnectionState.error,
         errorMessageFA: _cleanError(e),
+        lastIpTest: null,
       );
     }
   }
@@ -219,8 +231,10 @@ class VpnController extends StateNotifier<MlzAppState> {
     try {
       await _bridge.disconnect();
     } finally {
+      _ipAutoTested = false;
       state = state.copyWith(
         connState: VpnConnectionState.disconnected,
+        lastIpTest: null,
         connectedSeconds: 0,
         uploadBps: 0,
         downloadBps: 0,
@@ -272,6 +286,12 @@ class VpnController extends StateNotifier<MlzAppState> {
           ? state.errorMessageFA
           : (serverError == null || serverError.isEmpty ? null : serverError),
     );
+    if (st == VpnConnectionState.connected &&
+        !_ipAutoTested &&
+        !state.ipTesting) {
+      _ipAutoTested = true;
+      unawaited(testIpRectangle());
+    }
   }
 
   /// Triggered when the user clicks on the IP display rectangle.
@@ -279,7 +299,22 @@ class VpnController extends StateNotifier<MlzAppState> {
     if (state.ipTesting) return;
     state = state.copyWith(ipTesting: true);
     try {
-      final res = await _bridge.testIpHealth();
+      final IpTestResultModel res;
+      if (kQaIranMock) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+        res = const IpTestResultModel(
+          publicIp: '5.57.38.194',
+          countryCode: 'IR',
+          countryNameFA: 'ایران (شبیه‌سازی تست)',
+          realDelayMs: 38,
+          dnsProtected: true,
+          iranDirectOk: true,
+        );
+      } else {
+        res = await _bridge
+            .testIpHealth()
+            .timeout(const Duration(seconds: 20));
+      }
       state = state.copyWith(
         ipTesting: false,
         lastIpTest: res,
@@ -288,7 +323,9 @@ class VpnController extends StateNotifier<MlzAppState> {
     } catch (e) {
       state = state.copyWith(
         ipTesting: false,
-        errorMessageFA: 'تست آی‌پی ناموفق بود: ${_cleanError(e)}',
+        errorMessageFA: e is TimeoutException
+            ? 'تست آی‌پی بیش از حد طول کشید؛ دوباره تلاش کنید.'
+            : 'تست آی‌پی ناموفق بود: ${_cleanError(e)}',
       );
     }
   }
@@ -411,15 +448,25 @@ class VpnController extends StateNotifier<MlzAppState> {
     final raw = error
         .toString()
         .replaceFirst('Exception: ', '')
-        .replaceFirst('PlatformException(', '');
-    if (raw.contains('end-to-end health check')) {
+        .replaceFirst('PlatformException(', '')
+        .trim();
+    final lower = raw.toLowerCase();
+    if (lower.contains('end-to-end health check') ||
+        lower.contains('no healthy') ||
+        lower.contains('no candidate')) {
       return 'هیچ سروری پاسخ سالم نداد؛ چند لحظه بعد دوباره تلاش کنید.';
     }
-    if (raw.contains('clash delay probe HTTP')) {
-      return 'سرورهای فعلی موقتاً پاسخ نمی‌دهند؛ دوباره تلاش کنید.';
+    if (lower.contains('clash delay probe') ||
+        lower.contains('timeout') ||
+        lower.contains('timed out')) {
+      return 'زمان پاسخ‌گویی سرور به پایان رسید؛ دوباره تلاش کنید.';
     }
-    if (raw.contains('no healthy')) {
-      return 'سرور سالمی پیدا نشد؛ دوباره تلاش کنید.';
+    if (lower.contains('permission') || lower.contains('denied')) {
+      return 'دسترسی لازم داده نشد؛ تنظیمات برنامه را بررسی کنید.';
+    }
+    final hasPersian = RegExp(r'[\u0600-\u06FF]').hasMatch(raw);
+    if (!hasPersian && RegExp(r'[A-Za-z]').hasMatch(raw)) {
+      return 'اتصال برقرار نشد؛ لطفاً دوباره تلاش کنید.';
     }
     return raw;
   }

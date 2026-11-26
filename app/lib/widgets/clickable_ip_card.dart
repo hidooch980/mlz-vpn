@@ -24,7 +24,9 @@ class ClickableIpCard extends StatelessWidget {
 
     final ipLine = lastResult != null
         ? '${lastResult!.publicIp}  •  ${lastResult!.countryNameFA}'
-        : (isConnected ? 'در حال دریافت IP خروجی...' : 'برای بررسی آی‌پی واقعی کلیک کنید');
+        : (isConnected
+            ? 'برای دریافت آی‌پی خروجی، این کارت را لمس کنید'
+            : 'برای بررسی آی‌پی واقعی کلیک کنید');
 
     return SpatialGlassCard(
       onTap: onTapTest,
