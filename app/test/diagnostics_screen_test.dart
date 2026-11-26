@@ -57,7 +57,54 @@ DiagnosticsReportModel _report({bool healed = false}) {
   });
 }
 
+DiagnosticsReportModel _failedConnectionReport() {
+  return DiagnosticsReportModel.fromJson({
+    'timestamp': 1795673000,
+    'summary_fa':
+        'آخرین تلاش اتصال ناموفق بود: هیچ‌کدام از ۸ مسیر برتر پاسخ ندادند.',
+    'headline_fa': 'اتصال VPN برقرار نشد',
+    'health_score': 56,
+    'health_label_fa': 'نیازمند توجه',
+    'auto_healed': false,
+    'auto_fix_count': 0,
+    'needs_action': true,
+    'steps': [
+      for (final id in [
+        'interface',
+        'clock',
+        'dns',
+        'conflict',
+        'dpi',
+        'iran_direct',
+        'feed',
+        'exit',
+        'cores'
+      ])
+        {
+          'id': id,
+          'title_fa': id == 'exit'
+              ? 'سلامت خروج تونل و آی‌پی نهایی'
+              : (id == 'cores'
+                  ? 'آماده‌باش هسته‌ها و مسیرهای پشتیبان'
+                  : 'بررسی $id'),
+          'status': (id == 'exit' || id == 'cores') ? 'failed' : 'ok',
+          'severity':
+              id == 'cores' ? 'critical' : (id == 'exit' ? 'warning' : 'ok'),
+          'detail_fa': id == 'cores' || id == 'exit'
+              ? 'اتصال VPN برقرار نشد: هیچ‌کدام از ۸ مسیر برتر پاسخ ندادند.'
+              : 'این بخش سالم است.',
+          'auto_applied': false,
+          'can_auto_fix': false,
+          'fix_label_fa': '',
+        }
+    ],
+  });
+}
+
 class _FakeBridge implements EngineBridge {
+  _FakeBridge({this.connected = false});
+
+  bool connected;
   int diagnosticsCalls = 0;
   int healCalls = 0;
 
@@ -76,7 +123,8 @@ class _FakeBridge implements EngineBridge {
   }
 
   @override
-  Future<Map<String, dynamic>> getStatus() async => {'state': 'disconnected'};
+  Future<Map<String, dynamic>> getStatus() async =>
+      {'state': connected ? 'connected' : 'disconnected'};
 
   @override
   Future<Map<String, dynamic>> connect({
@@ -109,6 +157,14 @@ class _FakeBridge implements EngineBridge {
   Future<void> dispose() async {}
 }
 
+class _FailedConnectionBridge extends _FakeBridge {
+  @override
+  Future<DiagnosticsReportModel> runDiagnostics() async {
+    diagnosticsCalls++;
+    return _failedConnectionReport();
+  }
+}
+
 void main() {
   testWidgets('diagnostics runs automatically, shows details and heals',
       (tester) async {
@@ -117,7 +173,7 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final bridge = _FakeBridge();
+    final bridge = _FakeBridge(connected: true);
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -146,6 +202,41 @@ void main() {
     expect(find.text('همه‌چیز سالم است'), findsOneWidget);
     expect(find.text('خروج تونل پس از خودترمیمی با موفقیت آزمون شد.'),
         findsOneWidget);
+  });
+
+  testWidgets(
+      'failed connection offers a real reconnect, not just connect-first',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(920, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          vpnControllerProvider
+              .overrideWith((ref) => VpnController(_FailedConnectionBridge())),
+        ],
+        child: MaterialApp(
+          theme: MlzTheme.dark(),
+          home: const DiagnosticsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('اتصال VPN برقرار نشد'), findsOneWidget);
+    expect(find.textContaining('هیچ‌کدام از ۸ مسیر'), findsWidgets);
+
+    final retry = find.text('تلاش دوباره برای اتصال');
+    expect(retry, findsOneWidget);
+    await tester.ensureVisible(retry);
+    final button = tester.widget<FilledButton>(
+      find.ancestor(of: retry, matching: find.byType(FilledButton)),
+    );
+    expect(button.onPressed, isNotNull);
+    expect(find.text('رفع خودکار مشکلات'), findsNothing);
   });
 
   testWidgets('diagnostics screen visual snapshot', (tester) async {

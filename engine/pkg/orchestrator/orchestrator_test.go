@@ -2,10 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/diagnostics"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/model"
+	"github.com/mlz-vpn/mlz-vpn/engine/pkg/probe"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/subscription"
 )
 
@@ -110,5 +112,46 @@ func TestResilientEngineModeOnAndroid(t *testing.T) {
 	}
 	if got := desktop.resilientEngineMode(""); got != model.EngineModeAuto {
 		t.Fatalf("empty mode should become auto, got %q", got)
+	}
+}
+
+func TestShortlistConnectionAttemptsSkipsDuplicateEndpoints(t *testing.T) {
+	ranked := make([]probe.ProbeResult, 0, 20)
+	for i := 0; i < 10; i++ {
+		// Each endpoint appears twice, mimicking merged duplicate feed entries.
+		for j := 0; j < 2; j++ {
+			ranked = append(ranked, probe.ProbeResult{
+				Node: model.Node{Address: "198.51.100.10", Port: 10000 + i},
+			})
+		}
+	}
+
+	attempts := shortlistConnectionAttempts(ranked, 8)
+	if len(attempts) != 8 {
+		t.Fatalf("expected 8 attempts, got %d", len(attempts))
+	}
+	seen := make(map[string]bool, len(attempts))
+	for _, candidate := range attempts {
+		key := fmt.Sprintf("%s:%d", candidate.Node.Address, candidate.Node.Port)
+		if seen[key] {
+			t.Fatalf("duplicate endpoint %s in attempts", key)
+		}
+		seen[key] = true
+	}
+}
+
+func TestShortlistConnectionAttemptsKeepsLessThanLimit(t *testing.T) {
+	ranked := []probe.ProbeResult{
+		{Node: model.Node{Address: "203.0.113.1", Port: 443}},
+		{Node: model.Node{Address: "203.0.113.1", Port: 443}},
+		{Node: model.Node{Address: "203.0.113.2", Port: 8443}},
+	}
+
+	attempts := shortlistConnectionAttempts(ranked, 8)
+	if len(attempts) != 2 {
+		t.Fatalf("expected 2 unique endpoints, got %d", len(attempts))
+	}
+	if attempts[0].Node.Port != 443 || attempts[1].Node.Port != 8443 {
+		t.Fatalf("order was not preserved: %+v", attempts)
 	}
 }

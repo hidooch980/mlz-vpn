@@ -340,9 +340,15 @@ func RunDiagnostics(ctx context.Context, prober Prober, runtime ...RuntimeContex
 	}
 	if !rt.Connected {
 		// A disconnected VPN is a warning, not a broken local network: the
-		// offline checks above can still be fully healthy.
+		// offline checks above can still be fully healthy. If the last connect
+		// attempt failed, report that real reason instead of a generic "connect
+		// first" instruction the user cannot act on.
 		exitStep.Status, exitStep.Severity = "failed", "warning"
-		exitStep.DetailFA = "اتصال VPN برقرار نیست؛ برای آزمون خروج و تأخیر واقعی ابتدا وصل شوید."
+		if lastError := strings.TrimSpace(rt.LastErrorFA); lastError != "" {
+			exitStep.DetailFA = "اتصال VPN برقرار نشد: " + trimDetail(lastError)
+		} else {
+			exitStep.DetailFA = "اتصال VPN برقرار نیست؛ برای آزمون خروج و تأخیر واقعی ابتدا وصل شوید."
+		}
 	} else if rt.Connected {
 		if rt.LastIP == nil || strings.TrimSpace(rt.LastIP.PublicIP) == "" {
 			exitStep.Status, exitStep.Severity = "failed", "warning"
@@ -378,6 +384,13 @@ func RunDiagnostics(ctx context.Context, prober Prober, runtime ...RuntimeContex
 		coreStep.Status, coreStep.Severity = "failed", "critical"
 		coreStep.DetailFA = "بدون سرور، هسته‌ها نمی‌توانند مسیری برای اتصال بسازند."
 		coreStep.CanAutoFix, coreStep.FixLabelFA = true, "تازه‌سازی فید و تلاش دوباره"
+	case strings.TrimSpace(rt.LastErrorFA) != "" && !rt.Connected:
+		// Disconnect() clears the live state after a failed attempt, so the last
+		// error is the only reliable signal here. Keep it visible and do not
+		// advertise a Go-only repair: on Android the TUN interface is owned by
+		// the VpnService, and a core restart alone cannot restore it.
+		coreStep.Status, coreStep.Severity = "failed", "critical"
+		coreStep.DetailFA = "آخرین تلاش اتصال ناموفق بود: " + trimDetail(rt.LastErrorFA)
 	case rt.State == "error" && strings.TrimSpace(rt.LastErrorFA) != "":
 		coreStep.Status, coreStep.Severity = "failed", "critical"
 		coreStep.DetailFA = "آخرین تلاش اتصال ناموفق بود: " + trimDetail(rt.LastErrorFA)
@@ -408,10 +421,32 @@ func RunDiagnostics(ctx context.Context, prober Prober, runtime ...RuntimeContex
 		Steps:     steps,
 	}
 	recalculate(&report)
-	if !rt.Connected {
-		report.HeadlineFA = "اتصال VPN برقرار نیست"
-	}
+	applyRuntimeOutcome(&report, rt)
 	return report, action
+}
+
+// ApplyRuntimeOutcome keeps the report headline aligned with the real live state.
+// Disconnect() intentionally clears the state without discarding the last
+// connection error, so a failed attempt must remain visible as a failed attempt
+// rather than looking like a healthy network that merely needs a connection.
+func ApplyRuntimeOutcome(report *model.DiagnosticsReport, rt RuntimeContext) {
+	applyRuntimeOutcome(report, rt)
+}
+
+func applyRuntimeOutcome(report *model.DiagnosticsReport, rt RuntimeContext) {
+	if rt.Connected {
+		return
+	}
+	lastError := strings.TrimSpace(rt.LastErrorFA)
+	if lastError != "" {
+		if stepFailed(report, "cores") || stepFailed(report, "exit") {
+			report.HeadlineFA = "اتصال VPN برقرار نشد"
+			report.SummaryFA = "آخرین تلاش اتصال ناموفق بود: " + trimDetail(lastError) +
+				" برای تلاش دوباره، دکمهٔ «تلاش دوباره برای اتصال» را در همین صفحه بزنید."
+			return
+		}
+	}
+	report.HeadlineFA = "اتصال VPN برقرار نیست"
 }
 
 func diagnosticStep(id, title string, ok bool, severity, okMsg, failMsg string, canFix bool, fixLabel string) model.DiagnosticStep {

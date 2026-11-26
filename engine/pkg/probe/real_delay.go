@@ -208,8 +208,56 @@ func fetchPublicIPInfo(ctx context.Context, client *http.Client) (struct {
 		IP      string
 		Country string
 	}
-	// Several independent endpoints are tried because ipinfo.io and ipify are
-	// intermittently blocked from Iranian ISPs and from some exit nodes.
+	var lastErr error
+	// Cloudflare's trace endpoint is reachable from many Iranian ISPs where the
+	// JSON geo-IP APIs are blocked. Try it first, keeping the JSON services as a
+	// fallback for networks that block Cloudflare.
+	for _, endpoint := range []string{
+		"https://www.cloudflare.com/cdn-cgi/trace",
+		"https://1.1.1.1/cdn-cgi/trace",
+	} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "MLZ-VPN/1.0")
+		requestStart := time.Now()
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("IP trace endpoint %s returned HTTP %d", endpoint, resp.StatusCode)
+			continue
+		}
+		var ip, country string
+		for _, line := range strings.Split(string(body), "\n") {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok {
+				continue
+			}
+			switch key {
+			case "ip":
+				ip = strings.TrimSpace(value)
+			case "loc":
+				country = strings.ToUpper(strings.TrimSpace(value))
+			}
+		}
+		if ip != "" {
+			return result{IP: ip, Country: country}, time.Since(requestStart), nil
+		}
+	}
+
+	// Several independent JSON endpoints are tried because ipinfo.io and ipify
+	// are intermittently blocked from Iranian ISPs and from some exit nodes.
 	endpoints := []string{
 		"https://ipwho.is/",
 		"https://api.myip.com",
@@ -218,7 +266,6 @@ func fetchPublicIPInfo(ctx context.Context, client *http.Client) (struct {
 		"https://api.ipify.org?format=json",
 		"https://ifconfig.me/all.json",
 	}
-	var lastErr error
 	for _, endpoint := range endpoints {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/diagnostics"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/model"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/orchestrator"
+	"github.com/mlz-vpn/mlz-vpn/engine/pkg/probe"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/subscription"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/updater"
 )
@@ -40,8 +41,8 @@ func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, p
 	runner := newAndroidRunner(cacheDir, tunFD, protector, networkJSON)
 	activeRunner = runner
 	orch = orchestrator.New(orchestrator.Config{
-		CurrentBuild:    109,
-		CurrentVersion:  "1.0.9",
+		CurrentBuild:    110,
+		CurrentVersion:  "1.0.10",
 		UpdatePublicKey: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 		CacheDir:        cacheDir,
 		RuleSetDir:      ruleSetDir,
@@ -125,11 +126,21 @@ func TestIPHealth() string {
 	mu.Lock()
 	o := orch
 	mu.Unlock()
-	if o == nil {
-		return `{"error":"engine not initialized"}`
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
+	// The IP rectangle must also work before the first successful VPN connection:
+	// a direct check still tells the user their real ISP IP and proves that the
+	// public-IP endpoints are reachable. It is explicitly marked as non-tunneled.
+	if o == nil {
+		res, err := probe.RunIPHealthCheck(ctx, 0)
+		if err != nil {
+			b, _ := json.Marshal(map[string]string{"error": err.Error()})
+			return string(b)
+		}
+		b, _ := json.Marshal(res)
+		return string(b)
+	}
 	res, err := o.TestIPHealth(ctx)
 	if err != nil {
 		b, _ := json.Marshal(map[string]string{"error": err.Error()})

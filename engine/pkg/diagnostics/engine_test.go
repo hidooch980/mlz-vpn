@@ -128,6 +128,43 @@ func TestRunDiagnosticsOfflineIsUseful(t *testing.T) {
 	}
 }
 
+func TestRunDiagnosticsExplainsFailedConnection(t *testing.T) {
+	const lastErr = "هیچ‌کدام از ۸ مسیر برتر اتصال سالم برقرار نکردند"
+	report, action := RunDiagnostics(context.Background(), mockProber{
+		hasNet: true, skew: 0, poisoned: false, conflict: false, udpOK: true, iranDirect: true,
+	}, RuntimeContext{
+		State: "disconnected", RuntimeKnown: true, NodeCount: 24, FeedAge: time.Minute,
+		LastErrorFA: lastErr,
+	})
+
+	exit := stepByID(report, "exit")
+	if exit.Status != "failed" || !strings.Contains(exit.DetailFA, lastErr) {
+		t.Fatalf("exit step must carry the real connect failure, got %+v", exit)
+	}
+	if strings.Contains(exit.DetailFA, "ابتدا وصل شوید") {
+		t.Fatalf("failed connection must not tell the user to connect first: %q", exit.DetailFA)
+	}
+	cores := stepByID(report, "cores")
+	if cores.Status != "failed" || !strings.Contains(cores.DetailFA, lastErr) {
+		t.Fatalf("core step must carry the real connect failure, got %+v", cores)
+	}
+	if cores.CanAutoFix {
+		t.Fatal("a Go-only repair cannot restore Android TUN; do not advertise it here")
+	}
+	if report.HeadlineFA != "اتصال VPN برقرار نشد" {
+		t.Fatalf("unexpected failed-connect headline: %q", report.HeadlineFA)
+	}
+	if report.HealthScore >= 86 {
+		t.Fatalf("failed connection must lower the score, got %d", report.HealthScore)
+	}
+	if !report.NeedsAction {
+		t.Fatal("failed connection must be actionable")
+	}
+	if action.Reconnect {
+		t.Fatal("diagnostics must not start a TUN reconnect on its own")
+	}
+}
+
 func TestRunDiagnosticsHealthyWithRuntime(t *testing.T) {
 	report, action := RunDiagnostics(context.Background(), mockProber{
 		hasNet: true, skew: 0, poisoned: false, conflict: false, udpOK: true, iranDirect: true,

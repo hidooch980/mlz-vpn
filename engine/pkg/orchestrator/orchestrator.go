@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -272,7 +273,7 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 			ranked = probe.RankNodes(ctx, nodes, healMode, req.Country, dialer)
 		}
 		if len(ranked) == 0 {
-			o.failWith("سرور مناسبی پاسخ نداد؛ لطفاً بخش عیب‌یابی هوشمند را اجرا کنید.")
+			o.failWith("هیچ سرور در دسترسی پیدا نشد؛ اتصال اینترنت را بررسی کنید و دوباره تلاش کنید.")
 			return errors.New("all candidate nodes unreachable")
 		}
 	}
@@ -292,10 +293,13 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		ranked = filtered
 	}
 
-	attempts := ranked
-	if len(attempts) > 4 {
-		attempts = attempts[:4]
-	}
+	// Try a wider, endpoint-diverse shortlist. RankNodes can only measure raw TCP
+	// reachability on Android (there is no temporary local core prober), so the
+	// highest-scoring four nodes are often alive at the TCP layer but unable to
+	// carry the actual proxy protocol. Retrying more distinct endpoints is the
+	// difference between "no server worked" and a usable connection on hostile
+	// networks.
+	attempts := shortlistConnectionAttempts(ranked, 8)
 	var chosen *probe.ProbeResult
 	var lastErr error
 	for i := range attempts {
@@ -329,9 +333,9 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		break
 	}
 	if chosen == nil {
-		msg := "خطا در راه‌اندازی هسته"
-		if lastErr != nil {
-			msg = fmt.Sprintf("خطا در راه‌اندازی هسته: %v", lastErr)
+		msg := fmt.Sprintf("هیچ‌کدام از %d مسیر برتر اتصال سالم برقرار نکردند؛ ممکن است سرورها در شبکهٔ شما مسدود یا خاموش باشند. فید را تازه کنید یا حالت هسته/کشور را تغییر دهید.", len(attempts))
+		if lastErr != nil && !strings.Contains(strings.ToLower(lastErr.Error()), "health check") {
+			msg = "راه‌اندازی هستهٔ اتصال ناموفق بود: " + trimConnectionError(lastErr.Error())
 		}
 		o.failWith(msg)
 		if lastErr != nil {
@@ -694,6 +698,7 @@ func (o *Orchestrator) RunSmartDiagnostics(ctx context.Context) model.Diagnostic
 
 	report.SummaryFA = ""
 	diagnostics.Recalculate(&report)
+	diagnostics.ApplyRuntimeOutcome(&report, rt)
 	return report
 }
 
@@ -771,6 +776,7 @@ func (o *Orchestrator) AutoHealDiagnostics(ctx context.Context, tunnelOverride .
 
 	report.SummaryFA = ""
 	diagnostics.Recalculate(&report)
+	diagnostics.ApplyRuntimeOutcome(&report, rt)
 	report.AutoHealed = report.AutoFixCount > 0
 	return report
 }
@@ -916,6 +922,48 @@ func (o *Orchestrator) DownloadAppUpdate(ctx context.Context, asset updater.Asse
 		return "", err
 	}
 	return dest, nil
+}
+
+// shortlistConnectionAttempts returns up to limit candidates with distinct
+// address:port endpoints. Duplicate feed entries are common after subscriptions
+// are merged; counting them twice would waste the whole connection budget on one
+// dead server.
+func shortlistConnectionAttempts(ranked []probe.ProbeResult, limit int) []probe.ProbeResult {
+	if limit <= 0 {
+		limit = 8
+	}
+	out := make([]probe.ProbeResult, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	for _, candidate := range ranked {
+		endpoint := fmt.Sprintf("%s:%d", candidate.Node.Address, candidate.Node.Port)
+		if _, ok := seen[endpoint]; ok {
+			continue
+		}
+		seen[endpoint] = struct{}{}
+		out = append(out, candidate)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
+
+func trimConnectionError(raw string) string {
+	raw = strings.TrimSpace(raw)
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.Contains(lower, "deadline exceeded"):
+		return "زمان راه‌اندازی هسته به پایان رسید."
+	case strings.Contains(lower, "address already in use"):
+		return "پورت محلی هسته در اختیار برنامهٔ دیگری است."
+	case strings.Contains(lower, "permission denied"):
+		return "دسترسی لازم برای اجرای هسته داده نشد."
+	}
+	runes := []rune(raw)
+	if len(runes) > 160 {
+		return string(runes[:160]) + "…"
+	}
+	return raw
 }
 
 func (o *Orchestrator) failWith(msgFA string) {

@@ -51,7 +51,7 @@ class MainActivity : FlutterFragmentActivity() {
                     result.success("""{"state":"disconnected"}""")
                 }
                 "getStatus" -> result.success(currentStatus())
-                "testIpHealth" -> jsonCall(result) { requireCore(); MlzCoreBridge.testIpHealth() }
+                "testIpHealth" -> jsonCall(result) { MlzCoreBridge.testIpHealth() }
                 // Diagnostics can run without a live VPN: the Go bridge falls
                 // back to local network/DNS probes when the tunnel is stopped.
                 "runDiagnostics" -> jsonCall(result) { MlzCoreBridge.runDiagnostics() }

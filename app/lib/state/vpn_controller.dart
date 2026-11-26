@@ -395,6 +395,49 @@ class VpnController extends StateNotifier<MlzAppState> {
 
   void clearError() => state = state.copyWith(errorMessageFA: null);
 
+  /// Re-enters the real platform connection path from the diagnostics screen.
+  /// Calling the Go auto-healer while disconnected cannot recreate Android's
+  /// VpnService TUN, so a failed attempt must be retried through the normal
+  /// connect flow. The method waits for the asynchronous Android service, then
+  /// refreshes the report with the outcome.
+  Future<void> retryConnectionAndDiagnose() async {
+    if (state.connState == VpnConnectionState.connecting ||
+        state.connState == VpnConnectionState.healing ||
+        state.diagnosticsRunning ||
+        state.diagnosticsHealing) {
+      return;
+    }
+    await toggleConnection();
+    final deadline = DateTime.now().add(const Duration(seconds: 150));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      await _refreshStatusSnapshot();
+      if (state.connState == VpnConnectionState.connected ||
+          state.connState == VpnConnectionState.error ||
+          (state.connState == VpnConnectionState.disconnected &&
+              (state.errorMessageFA ?? '').isNotEmpty)) {
+        break;
+      }
+    }
+    if (state.connState == VpnConnectionState.connecting) {
+      state = state.copyWith(
+        connState: VpnConnectionState.error,
+        errorMessageFA:
+            'اتصال در زمان مورد انتظار برقرار نشد؛ چند لحظه بعد دوباره تلاش کنید.',
+      );
+    }
+    // The engine triggers the IP test as soon as it reports connected. Give it
+    // a moment so the refreshed report can show the real exit instead of a
+    // stale "tap the IP card" warning.
+    if (state.connState == VpnConnectionState.connected) {
+      final ipDeadline = DateTime.now().add(const Duration(seconds: 22));
+      while (state.lastIpTest == null && DateTime.now().isBefore(ipDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
+    }
+    await runDiagnostics();
+  }
+
   Future<void> runDiagnostics() async {
     if (state.diagnosticsRunning || state.diagnosticsHealing) return;
     state = state.copyWith(
@@ -407,7 +450,6 @@ class VpnController extends StateNotifier<MlzAppState> {
       state = state.copyWith(
         diagnosticsRunning: false,
         diagnosticsReport: report,
-        errorMessageFA: null,
       );
       unawaited(_refreshStatusSnapshot());
     } catch (e) {
@@ -506,6 +548,10 @@ class VpnController extends StateNotifier<MlzAppState> {
         .replaceFirst('Exception: ', '')
         .replaceFirst('PlatformException(', '')
         .trim();
+    // The engine already phrases user-facing failures in Persian. Preserve that
+    // specific explanation instead of flattening it into a generic English
+    // pattern match (for example "end-to-end health check").
+    if (RegExp(r'[\u0600-\u06FF]').hasMatch(raw)) return raw;
     final lower = raw.toLowerCase();
     if (lower.contains('end-to-end health check') ||
         lower.contains('no healthy') ||
@@ -520,8 +566,7 @@ class VpnController extends StateNotifier<MlzAppState> {
     if (lower.contains('permission') || lower.contains('denied')) {
       return 'دسترسی لازم داده نشد؛ تنظیمات برنامه را بررسی کنید.';
     }
-    final hasPersian = RegExp(r'[\u0600-\u06FF]').hasMatch(raw);
-    if (!hasPersian && RegExp(r'[A-Za-z]').hasMatch(raw)) {
+    if (RegExp(r'[A-Za-z]').hasMatch(raw)) {
       return 'اتصال برقرار نشد؛ لطفاً دوباره تلاش کنید.';
     }
     return raw;

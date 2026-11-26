@@ -125,6 +125,12 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
                       stage: _stages[_stage],
                       onRerun: busy ? null : ctrl.runDiagnostics,
                       onHeal: busy ? null : ctrl.autoHealDiagnostics,
+                      onRetryConnect: (busy ||
+                              state.connState == VpnConnectionState.connecting)
+                          ? null
+                          : ctrl.retryConnectionAndDiagnose,
+                      connected:
+                          state.connState == VpnConnectionState.connected,
                       autoWatch: _autoWatch,
                       onAutoWatch: _toggleAutoWatch,
                     ),
@@ -146,6 +152,8 @@ class _ReportBody extends StatelessWidget {
   final String stage;
   final VoidCallback? onRerun;
   final VoidCallback? onHeal;
+  final VoidCallback? onRetryConnect;
+  final bool connected;
   final bool autoWatch;
   final ValueChanged<bool> onAutoWatch;
 
@@ -157,6 +165,8 @@ class _ReportBody extends StatelessWidget {
     required this.stage,
     required this.onRerun,
     required this.onHeal,
+    required this.onRetryConnect,
+    required this.connected,
     required this.autoWatch,
     required this.onAutoWatch,
   });
@@ -247,12 +257,29 @@ class _ReportBody extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  FilledButton.icon(
-                    onPressed: report.hasAutoFixable ? onHeal : null,
-                    icon: const Icon(Icons.build_circle_outlined, size: 18),
-                    label: Text(
-                        healing ? 'در حال خودترمیمی...' : 'رفع خودکار مشکلات'),
-                  ),
+                  if (report.hasAutoFixable && connected)
+                    FilledButton.icon(
+                      onPressed: busy ? null : onHeal,
+                      icon: const Icon(Icons.build_circle_outlined, size: 18),
+                      label: Text(healing
+                          ? 'در حال خودترمیمی...'
+                          : 'رفع خودکار مشکلات'),
+                    )
+                  else if (!connected && onRetryConnect != null)
+                    FilledButton.icon(
+                      onPressed: busy ? null : onRetryConnect,
+                      icon: const Icon(Icons.power_settings_new_rounded,
+                          size: 18),
+                      label: const Text('تلاش دوباره برای اتصال'),
+                    )
+                  else
+                    FilledButton.icon(
+                      onPressed: null,
+                      icon: const Icon(Icons.build_circle_outlined, size: 18),
+                      label: Text(healing
+                          ? 'در حال خودترمیمی...'
+                          : 'رفع خودکار مشکلات'),
+                    ),
                   OutlinedButton.icon(
                     onPressed: onRerun,
                     icon: const Icon(Icons.refresh_rounded, size: 18),

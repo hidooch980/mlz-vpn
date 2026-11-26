@@ -85,8 +85,8 @@ flutter build apk --release --dart-define=MLZ_TEST_IRAN_MOCK=true
 این build در نتایج تست، IP `5.57.38.194` و برچسب «ایران (شبیه‌سازی تست)» را نشان می‌دهد و فقط برای QA است. **هرگز این پرچم را در workflow انتشار یا APK عمومی تنظیم نکنید**؛ انتشار رسمی باید بدون `MLZ_TEST_IRAN_MOCK` ساخته شود.
 
 ## به‌روزرسانی داخل برنامه
-1. نسخهٔ `app/pubspec.yaml` را مثلاً به `1.0.9+109` افزایش دهید و همان عدد را در `engine/cmd/mlz-engine/main.go` و `engine/mobile/api.go` هم بگذارید.
-2. تگ `v1.0.9` را push کنید تا workflow، `version.json` امضاشده و همهٔ assetها را بسازد.
+1. نسخهٔ `app/pubspec.yaml` را مثلاً به `1.0.10+110` افزایش دهید و همان عدد را در `engine/cmd/mlz-engine/main.go` و `engine/mobile/api.go` هم بگذارید.
+2. تگ `v1.0.10` را push کنید تا workflow، `version.json` امضاشده و همهٔ assetها را بسازد.
 3. در ویندوز، برنامه فایل `windows_x64_setup` را دانلود و پس از بررسی SHA-256 اجرا می‌کند.
 4. در اندروید، برنامه asset متناظر ABI (`android_arm64`، `android_armv7` یا `android_x86_64`) را دانلود می‌کند، SHA-256 را تطبیق می‌دهد و با `FileProvider` نصب را شروع می‌کند. اگر مجوز «نصب از منابع ناشناس» داده نشده باشد، تنظیمات مربوطه باز می‌شود.
 
