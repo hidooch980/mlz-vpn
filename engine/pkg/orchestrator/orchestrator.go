@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -224,6 +223,8 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 	o.country = req.Country
 	o.batterySaver = req.BatterySaver
 	o.errorMsgFA = ""
+	// Do not leave a previous session's exit IP on screen while reconnecting.
+	o.lastIPTest = nil
 	o.mu.Unlock()
 
 	if runtime.GOOS == "android" {
@@ -266,8 +267,9 @@ func (o *Orchestrator) Connect(ctx context.Context, req ConnectRequest) error {
 		o.state = model.StateHealing
 		o.mu.Unlock()
 		_, healAction := diagnostics.RunDiagnostics(ctx, o.prober)
-		if healAction.RecommendedMode != "" && healAction.RecommendedMode != req.EngineMode {
-			ranked = probe.RankNodes(ctx, nodes, healAction.RecommendedMode, req.Country, dialer)
+		healMode := o.resilientEngineMode(healAction.RecommendedMode)
+		if healMode != "" && healMode != req.EngineMode {
+			ranked = probe.RankNodes(ctx, nodes, healMode, req.Country, dialer)
 		}
 		if len(ranked) == 0 {
 			o.failWith("سرور مناسبی پاسخ نداد؛ لطفاً بخش عیب‌یابی هوشمند را اجرا کنید.")
@@ -577,42 +579,209 @@ func (o *Orchestrator) TestIPHealth(ctx context.Context) (model.IPTestResult, er
 	return res, nil
 }
 
-// RunSmartDiagnostics runs the 7-step diagnostic suite and, when connected and
-// the ISP blocks UDP/DPI, actually reconnects through the recommended resilient
-// engine instead of merely reporting that a fix was applied.
-func (o *Orchestrator) RunSmartDiagnostics(ctx context.Context) model.DiagnosticsReport {
-	report, action := diagnostics.RunDiagnostics(ctx, o.prober)
-
+// runtimeDiagnosticsContext snapshots the live engine state and signed feed age
+// for the deterministic diagnostic pipeline.
+func (o *Orchestrator) runtimeDiagnosticsContext() diagnostics.RuntimeContext {
 	o.mu.RLock()
-	state := o.state
-	currentMode := o.engineMode
-	tunnelMode := o.tunnelMode
-	country := o.country
-	battery := o.batterySaver
+	rt := diagnostics.RuntimeContext{
+		Connected:    o.state == model.StateConnected,
+		State:        string(o.state),
+		EngineMode:   string(o.engineMode),
+		TunnelMode:   string(o.tunnelMode),
+		ActiveCore:   string(o.activeCore),
+		RuntimeKnown: true,
+	}
+	if o.activeNode != nil {
+		rt.ActiveNode = o.activeNode.Name
+	}
+	if o.lastIPTest != nil {
+		copyIP := *o.lastIPTest
+		rt.LastIP = &copyIP
+	}
+	rt.LastErrorFA = o.errorMsgFA
+	rt.ProxyPort = o.cfg.LocalMixedPort
 	o.mu.RUnlock()
 
-	if state != model.StateConnected || action.RecommendedMode == "" || action.RecommendedMode == model.EngineModeAuto {
-		return report
+	if rt.Connected {
+		if reporter, ok := o.runner.(interface{ SingBoxFailure() string }); ok {
+			rt.CoreFailure = reporter.SingBoxFailure()
+		}
 	}
-	if currentMode == action.RecommendedMode {
-		markDiagnosticApplied(&report, "dpi", "محدودیت UDP شناسایی شد؛ اتصال فعلی از قبل روی مسیر مقاوم TCP/Xray قرار دارد.")
+
+	nodes, lastSync := o.fetcher.CachedNodes()
+	rt.NodeCount = len(nodes)
+	for _, node := range nodes {
+		switch node.Engine {
+		case model.CoreXray:
+			rt.XrayNodes++
+		case model.CoreSingBox:
+			rt.SingBoxNodes++
+		}
+	}
+	if !lastSync.IsZero() {
+		rt.FeedAge = time.Since(lastSync)
+	}
+	return rt
+}
+
+func (o *Orchestrator) diagnose(ctx context.Context) (model.DiagnosticsReport, diagnostics.HealingAction, diagnostics.RuntimeContext) {
+	rt := o.runtimeDiagnosticsContext()
+	report, action := diagnostics.RunDiagnostics(ctx, o.prober, rt)
+	return report, action, rt
+}
+
+// resilientEngineMode keeps automatic repairs runnable on every platform.
+// Android ships only sing-box (no Xray binary), so the Windows-oriented
+// anti-DPI Xray mode must degrade to the automatic sing-box selection instead
+// of leaving the user disconnected with an unsupported-mode error.
+func (o *Orchestrator) resilientEngineMode(mode model.EngineMode) model.EngineMode {
+	if mode == "" {
+		return model.EngineModeAuto
+	}
+	if o.cfg.AndroidLibDir != "" && mode == model.EngineModeXrayAntiDPI {
+		return model.EngineModeAuto
+	}
+	return mode
+}
+
+// RunSmartDiagnostics runs the 9-step diagnostic suite and applies only safe,
+// non-disruptive repairs: refresh a stale signed feed and, when already
+// connected on a UDP/DPI-blocked network, rebuild the tunnel on the resilient
+// TCP/Xray path. It never starts a new VPN session without the user asking.
+func (o *Orchestrator) RunSmartDiagnostics(ctx context.Context) model.DiagnosticsReport {
+	report, action, rt := o.diagnose(ctx)
+
+	if action.RefreshFeed && !stepStatusIs(report, "interface", "failed") {
+		if _, err := o.SyncFeed(ctx, true); err == nil {
+			markDiagnosticApplied(&report, "feed", "فید امضاشده به‌صورت خودکار تازه شد و استخر سرورها بازسازی شد.")
+		} else {
+			markDiagnosticFailed(&report, "feed", "تازه‌سازی خودکار فید ناموفق بود: "+err.Error())
+		}
+	}
+
+	if rt.Connected && (action.Reconnect || action.CoreUnhealthy) {
+		targetMode := o.resilientEngineMode(model.EngineMode(rt.EngineMode))
+		if action.ForceTCPFallback && action.RecommendedMode != "" && action.RecommendedMode != model.EngineModeAuto {
+			targetMode = o.resilientEngineMode(action.RecommendedMode)
+		}
+		o.mu.RLock()
+		req := ConnectRequest{
+			TunnelMode:   model.TunnelMode(rt.TunnelMode),
+			EngineMode:   targetMode,
+			Country:      o.country,
+			BatterySaver: o.batterySaver,
+		}
+		o.mu.RUnlock()
+
+		if err := o.Connect(ctx, req); err != nil {
+			msg := fmt.Sprintf("بازسازی خودکار اتصال ناموفق بود: %v", err)
+			if action.Reconnect {
+				markDiagnosticFailed(&report, "dpi", msg)
+			}
+			markDiagnosticFailed(&report, "dns", msg)
+		} else {
+			if stepStatusIs(report, "dns", "failed") {
+				markDiagnosticApplied(&report, "dns", "DNS مسموم شناسایی شد و اتصال با DoH امن به‌طور خودکار بازسازی شد.")
+			}
+			if stepStatusIs(report, "dpi", "failed") {
+				markDiagnosticApplied(&report, "dpi", "محدودیت UDP/DPI شناسایی و اتصال روی مسیر مقاوم TCP/Xray بازسازی شد.")
+			}
+			if stepStatusIs(report, "cores", "failed") {
+				markDiagnosticApplied(&report, "cores", "هستهٔ متوقف‌شده شناسایی و اتصال به‌طور کامل بازسازی شد.")
+			}
+		}
+	}
+
+	report.SummaryFA = ""
+	diagnostics.Recalculate(&report)
+	return report
+}
+
+// AutoHealDiagnostics is the explicit one-tap remediation used by the
+// diagnostics screen. It refreshes the feed, reconnects through the best
+// resilient engine when needed, and verifies the exit IP afterwards.
+func (o *Orchestrator) AutoHealDiagnostics(ctx context.Context, tunnelOverride ...model.TunnelMode) model.DiagnosticsReport {
+	report, action, rt := o.diagnose(ctx)
+
+	if stepStatusIs(report, "interface", "failed") {
+		report.SummaryFA = ""
+		diagnostics.Recalculate(&report)
 		return report
 	}
 
-	req := ConnectRequest{
-		TunnelMode:   tunnelMode,
-		EngineMode:   action.RecommendedMode,
-		Country:      country,
-		BatterySaver: battery,
+	if action.RefreshFeed {
+		if _, err := o.SyncFeed(ctx, true); err == nil {
+			markDiagnosticApplied(&report, "feed", "فید امضاشده تازه شد و استخر سرورها بازسازی شد.")
+		} else {
+			markDiagnosticFailed(&report, "feed", "دریافت فید ناموفق بود: "+err.Error())
+		}
 	}
-	if err := o.Connect(ctx, req); err != nil {
-		markDiagnosticFailed(&report, "dpi", fmt.Sprintf("انتقال خودکار به مسیر مقاوم TCP/Xray ناموفق بود: %v", err))
-		report.SummaryFA += " تلاش برای ترمیم خودکار ناموفق بود؛ دوباره امتحان کنید."
-		return report
+
+	needConnect := action.Reconnect || action.CoreUnhealthy || stepStatusIs(report, "exit", "failed") ||
+		rt.State == "error" ||
+		(!rt.Connected && (stepStatusIs(report, "dns", "failed") || stepStatusIs(report, "dpi", "failed")))
+
+	if needConnect {
+		targetMode := o.resilientEngineMode(model.EngineMode(rt.EngineMode))
+		if action.ForceTCPFallback && action.RecommendedMode != "" && action.RecommendedMode != model.EngineModeAuto {
+			targetMode = o.resilientEngineMode(action.RecommendedMode)
+		}
+		snap := o.Snapshot()
+		tunnel := model.TunnelMode(rt.TunnelMode)
+		if len(tunnelOverride) > 0 && tunnelOverride[0] != "" {
+			tunnel = tunnelOverride[0]
+		}
+		req := ConnectRequest{
+			TunnelMode:   tunnel,
+			EngineMode:   targetMode,
+			Country:      snap.Country,
+			BatterySaver: o.batterySaver,
+		}
+		if err := o.Connect(ctx, req); err != nil {
+			markDiagnosticFailed(&report, "dpi", "تلاش خودکار برای بازسازی اتصال ناموفق بود: "+err.Error())
+			markDiagnosticFailed(&report, "exit", "اتصال پس از خودترمیمی برقرار نشد: "+err.Error())
+		} else {
+			if stepStatusIs(report, "dns", "failed") {
+				markDiagnosticApplied(&report, "dns", "اتصال با DoH امن و تنظیمات تازه بازسازی شد.")
+			}
+			if stepStatusIs(report, "dpi", "failed") {
+				markDiagnosticApplied(&report, "dpi", "اتصال روی مسیر مقاوم و هستهٔ جایگزین بازسازی شد.")
+			}
+			if stepStatusIs(report, "cores", "failed") {
+				markDiagnosticApplied(&report, "cores", "هسته دوباره راه‌اندازی شد و پورت محلی پاسخ می‌دهد.")
+			}
+			if ip, err := o.TestIPHealth(ctx); err != nil {
+				markDiagnosticFailed(&report, "exit", "اتصال برقرار شد اما آزمون خروج موفق نبود: "+err.Error())
+			} else {
+				detail := "خروج تونل سالم است: " + ip.PublicIP
+				if ip.CountryName != "" {
+					detail += " • " + ip.CountryName
+				}
+				if ip.RealDelayMS > 0 {
+					detail += fmt.Sprintf(" • تأخیر واقعی %dms", ip.RealDelayMS)
+				}
+				if stepStatusIs(report, "exit", "failed") {
+					markDiagnosticApplied(&report, "exit", "خروج تونل پس از خودترمیمی با موفقیت آزمون شد: "+ip.PublicIP)
+				} else {
+					setDiagnosticDetail(&report, "exit", detail)
+				}
+			}
+		}
 	}
-	markDiagnosticApplied(&report, "dpi", "محدودیت UDP/DPI شناسایی و اتصال به‌طور خودکار روی مسیر مقاوم TCP/Xray بازسازی شد.")
-	report.SummaryFA = strings.TrimSpace(report.SummaryFA + " اتصال خودکار با هسته مقاوم انجام شد.")
+
+	report.SummaryFA = ""
+	diagnostics.Recalculate(&report)
+	report.AutoHealed = report.AutoFixCount > 0
 	return report
+}
+
+func stepStatusIs(report model.DiagnosticsReport, id, status string) bool {
+	for _, step := range report.Steps {
+		if step.ID == id {
+			return step.Status == status
+		}
+	}
+	return false
 }
 
 func markDiagnosticApplied(report *model.DiagnosticsReport, id, detail string) {
@@ -621,6 +790,15 @@ func markDiagnosticApplied(report *model.DiagnosticsReport, id, detail string) {
 			report.Steps[i].Status = "fixed"
 			report.Steps[i].DetailFA = detail
 			report.Steps[i].AutoApplied = true
+			return
+		}
+	}
+}
+
+func setDiagnosticDetail(report *model.DiagnosticsReport, id, detail string) {
+	for i := range report.Steps {
+		if report.Steps[i].ID == id {
+			report.Steps[i].DetailFA = detail
 			return
 		}
 	}

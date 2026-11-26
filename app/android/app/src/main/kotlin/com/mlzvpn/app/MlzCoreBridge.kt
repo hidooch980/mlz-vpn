@@ -183,6 +183,8 @@ object MlzCoreBridge {
 
     fun runDiagnostics(): String = invoke("runDiagnostics")
 
+    fun autoHealDiagnostics(): String = invoke("autoHealDiagnostics")
+
     fun toggleLan(enabled: Boolean, usePin: Boolean): String =
         invoke("toggleLANSharing", enabled, usePin)
 

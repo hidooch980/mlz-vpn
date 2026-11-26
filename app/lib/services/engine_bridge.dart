@@ -27,7 +27,12 @@ abstract class EngineBridge {
 
   Future<DiagnosticsReportModel> runDiagnostics();
 
-  Future<LanShareModel> toggleLanShare({required bool enabled, required bool usePin});
+  Future<DiagnosticsReportModel> autoHealDiagnostics({
+    required TunnelModeOption tunnelMode,
+  });
+
+  Future<LanShareModel> toggleLanShare(
+      {required bool enabled, required bool usePin});
 
   Future<AppUpdateInfo?> checkUpdate();
 

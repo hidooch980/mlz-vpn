@@ -52,7 +52,10 @@ class MainActivity : FlutterFragmentActivity() {
                 }
                 "getStatus" -> result.success(currentStatus())
                 "testIpHealth" -> jsonCall(result) { requireCore(); MlzCoreBridge.testIpHealth() }
-                "runDiagnostics" -> jsonCall(result) { requireCore(); MlzCoreBridge.runDiagnostics() }
+                // Diagnostics can run without a live VPN: the Go bridge falls
+                // back to local network/DNS probes when the tunnel is stopped.
+                "runDiagnostics" -> jsonCall(result) { MlzCoreBridge.runDiagnostics() }
+                "autoHealDiagnostics" -> jsonCall(result) { requireCore(); MlzCoreBridge.autoHealDiagnostics() }
                 "toggleLan" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: false
                     val usePin = call.argument<Boolean>("use_pin") ?: false

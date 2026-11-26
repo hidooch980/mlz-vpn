@@ -1,7 +1,7 @@
 name: mlz_vpn
 description: MLZ VPN — Multi-core zero-config anti-censorship VPN client (MIT).
 publish_to: none
-version: 1.0.7+107
+version: 1.0.8+108
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

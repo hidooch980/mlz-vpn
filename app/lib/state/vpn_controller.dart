@@ -26,6 +26,7 @@ class MlzAppState {
   final IpTestResultModel? lastIpTest;
   final DiagnosticsReportModel? diagnosticsReport;
   final bool diagnosticsRunning;
+  final bool diagnosticsHealing;
   final bool lanBusy;
   final bool updateChecking;
   final bool updateDownloading;
@@ -57,6 +58,7 @@ class MlzAppState {
     this.lastIpTest,
     this.diagnosticsReport,
     this.diagnosticsRunning = false,
+    this.diagnosticsHealing = false,
     this.lanBusy = false,
     this.updateChecking = false,
     this.updateDownloading = false,
@@ -94,6 +96,7 @@ class MlzAppState {
     Object? lastIpTest = _unset,
     Object? diagnosticsReport = _unset,
     bool? diagnosticsRunning,
+    bool? diagnosticsHealing,
     bool? lanBusy,
     bool? updateChecking,
     bool? updateDownloading,
@@ -125,6 +128,7 @@ class MlzAppState {
           ? this.diagnosticsReport
           : diagnosticsReport as DiagnosticsReportModel?,
       diagnosticsRunning: diagnosticsRunning ?? this.diagnosticsRunning,
+      diagnosticsHealing: diagnosticsHealing ?? this.diagnosticsHealing,
       lanBusy: lanBusy ?? this.lanBusy,
       updateChecking: updateChecking ?? this.updateChecking,
       updateDownloading: updateDownloading ?? this.updateDownloading,
@@ -222,6 +226,25 @@ class VpnController extends StateNotifier<MlzAppState> {
         errorMessageFA: _cleanError(e),
         lastIpTest: null,
       );
+      // Automatic invisible diagnosis after a failed connection: the report is
+      // ready when the user opens the diagnostics screen, without hiding the
+      // original connection error.
+      unawaited(_diagnoseAfterFailure());
+    }
+  }
+
+  Future<void> _diagnoseAfterFailure() async {
+    if (state.diagnosticsRunning || state.diagnosticsHealing) return;
+    state = state.copyWith(diagnosticsRunning: true);
+    try {
+      final report =
+          await _bridge.runDiagnostics().timeout(const Duration(seconds: 100));
+      state = state.copyWith(
+        diagnosticsRunning: false,
+        diagnosticsReport: report,
+      );
+    } catch (_) {
+      state = state.copyWith(diagnosticsRunning: false);
     }
   }
 
@@ -311,9 +334,7 @@ class VpnController extends StateNotifier<MlzAppState> {
           iranDirectOk: true,
         );
       } else {
-        res = await _bridge
-            .testIpHealth()
-            .timeout(const Duration(seconds: 20));
+        res = await _bridge.testIpHealth().timeout(const Duration(seconds: 20));
       }
       state = state.copyWith(
         ipTesting: false,
@@ -375,24 +396,60 @@ class VpnController extends StateNotifier<MlzAppState> {
   void clearError() => state = state.copyWith(errorMessageFA: null);
 
   Future<void> runDiagnostics() async {
-    if (state.diagnosticsRunning) return;
+    if (state.diagnosticsRunning || state.diagnosticsHealing) return;
     state = state.copyWith(
       diagnosticsRunning: true,
-      diagnosticsReport: null,
-      errorMessageFA: null,
+      diagnosticsHealing: false,
     );
     try {
-      final report = await _bridge.runDiagnostics();
+      final report =
+          await _bridge.runDiagnostics().timeout(const Duration(seconds: 100));
       state = state.copyWith(
         diagnosticsRunning: false,
         diagnosticsReport: report,
+        errorMessageFA: null,
       );
+      unawaited(_refreshStatusSnapshot());
     } catch (e) {
       state = state.copyWith(
         diagnosticsRunning: false,
         errorMessageFA: 'عیب‌یابی ناموفق بود: ${_cleanError(e)}',
       );
     }
+  }
+
+  Future<void> autoHealDiagnostics() async {
+    if (state.diagnosticsRunning || state.diagnosticsHealing) return;
+    state = state.copyWith(
+      diagnosticsHealing: true,
+      diagnosticsRunning: false,
+      errorMessageFA: null,
+    );
+    try {
+      final report = await _bridge
+          .autoHealDiagnostics(tunnelMode: state.tunnelMode)
+          .timeout(const Duration(minutes: 2));
+      state = state.copyWith(
+        diagnosticsHealing: false,
+        diagnosticsReport: report,
+      );
+      await _refreshStatusSnapshot();
+      if (state.connState == VpnConnectionState.connected) {
+        _ipAutoTested = true;
+      }
+    } catch (e) {
+      state = state.copyWith(
+        diagnosticsHealing: false,
+        errorMessageFA: 'خودترمیمی ناموفق بود: ${_cleanError(e)}',
+      );
+    }
+  }
+
+  Future<void> _refreshStatusSnapshot() async {
+    try {
+      final snap = await _bridge.getStatus();
+      _applySnapshot(snap);
+    } catch (_) {}
   }
 
   Future<void> toggleLanSharing(
@@ -434,8 +491,7 @@ class VpnController extends StateNotifier<MlzAppState> {
           ? state.copyWith(updateChecking: false)
           : state.copyWith(
               updateChecking: false,
-              errorMessageFA:
-                  'بررسی به‌روزرسانی ناموفق بود: ${_cleanError(e)}',
+              errorMessageFA: 'بررسی به‌روزرسانی ناموفق بود: ${_cleanError(e)}',
             );
     }
   }

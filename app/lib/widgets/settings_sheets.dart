@@ -3,119 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../screens/diagnostics_screen.dart';
 import '../state/vpn_controller.dart';
 import '../theme/mlz_theme.dart';
 
 void openDiagnosticsSheet(
     BuildContext context, MlzAppState _, VpnController ctrl) {
-  final c = Theme.of(context).extension<MlzColors>()!;
-  ctrl.runDiagnostics();
-
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: c.canvas,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
-    builder: (ctx) {
-      return Consumer(
-        builder: (ctx, ref, _) {
-          final liveState = ref.watch(vpnControllerProvider);
-          return Directionality(
-            textDirection: TextDirection.rtl,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('عیب‌یاب و خودترمیمی هوشمند',
-                        style: TextStyle(
-                            color: c.textPrimary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 10),
-                    if (liveState.diagnosticsRunning)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 28),
-                        child: Center(
-                            child: CircularProgressIndicator(
-                                color: c.brandPrimary)),
-                      )
-                    else if (liveState.diagnosticsReport == null) ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 20),
-                        child: Text(
-                          liveState.errorMessageFA ?? 'گزارشی در دسترس نیست.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: c.error, fontSize: 12),
-                        ),
-                      ),
-                      FilledButton.icon(
-                        onPressed: ctrl.runDiagnostics,
-                        icon: const Icon(Icons.refresh_rounded, size: 18),
-                        label: const Text('تلاش دوباره'),
-                      ),
-                    ] else ...[
-                      SpatialGlassCard(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(liveState.diagnosticsReport!.summaryFA,
-                            style:
-                                TextStyle(color: c.textPrimary, fontSize: 13)),
-                      ),
-                      if (liveState.errorMessageFA != null) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          liveState.errorMessageFA!,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: c.error, fontSize: 12),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      ...liveState.diagnosticsReport!.steps.map(
-                        (step) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: SpatialGlassCard(
-                            padding: const EdgeInsets.all(12),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                    child: Text(step.titleFA,
-                                        style: TextStyle(
-                                            color: c.textPrimary,
-                                            fontSize: 13))),
-                                Text(
-                                  step.status == 'ok'
-                                      ? 'سالم ✓'
-                                      : (step.status == 'fixed'
-                                          ? 'اصلاح شد'
-                                          : 'نیاز به بررسی'),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: step.status == 'ok'
-                                        ? c.connectedGlow
-                                        : (step.status == 'fixed'
-                                            ? c.brandPrimary
-                                            : c.error),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    },
+  // The full-screen workspace runs the 9-step suite automatically and exposes
+  // detailed findings plus one-tap auto-healing.
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(builder: (_) => const DiagnosticsScreen()),
   );
 }
 
@@ -238,8 +135,8 @@ void openLanShareSheet(
                             ),
                           const SizedBox(height: 10),
                           TextButton.icon(
-                            onPressed: () => Clipboard.setData(
-                                ClipboardData(text: qrData)),
+                            onPressed: () =>
+                                Clipboard.setData(ClipboardData(text: qrData)),
                             icon: const Icon(Icons.copy_rounded, size: 16),
                             label: const Text('کپی آدرس اتصال'),
                           ),

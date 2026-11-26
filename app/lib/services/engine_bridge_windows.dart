@@ -241,6 +241,17 @@ class WindowsEngineBridge implements EngineBridge {
   }
 
   @override
+  Future<DiagnosticsReportModel> autoHealDiagnostics({
+    required TunnelModeOption tunnelMode,
+  }) async {
+    await _ensureStarted(tunnelMode);
+    final res = await _request('POST', '/v1/diagnostics/heal', {
+      'tunnel_mode': tunnelMode == TunnelModeOption.tun ? 'tun' : 'proxy',
+    });
+    return DiagnosticsReportModel.fromJson(res);
+  }
+
+  @override
   Future<LanShareModel> toggleLanShare(
       {required bool enabled, required bool usePin}) async {
     if (_activePort == null) {

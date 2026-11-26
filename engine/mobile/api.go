@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mlz-vpn/mlz-vpn/engine/pkg/diagnostics"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/model"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/orchestrator"
 	"github.com/mlz-vpn/mlz-vpn/engine/pkg/subscription"
@@ -39,8 +40,8 @@ func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, p
 	runner := newAndroidRunner(cacheDir, tunFD, protector, networkJSON)
 	activeRunner = runner
 	orch = orchestrator.New(orchestrator.Config{
-		CurrentBuild:    107,
-		CurrentVersion:  "1.0.7",
+		CurrentBuild:    108,
+		CurrentVersion:  "1.0.8",
 		UpdatePublicKey: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 		CacheDir:        cacheDir,
 		RuleSetDir:      ruleSetDir,
@@ -138,15 +139,38 @@ func TestIPHealth() string {
 	return string(b)
 }
 
-// RunDiagnostics runs the 7-step diagnostic pipeline and returns JSON.
+// RunDiagnostics runs the 9-step diagnostic pipeline and returns JSON.
 func RunDiagnostics() string {
 	mu.Lock()
 	o := orch
 	mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
 	if o == nil {
-		return `{"error":"engine not initialized"}`
+		// The VPN service is not running yet (the user opened diagnostics while
+		// disconnected). Still run the local, read-only checks so the screen can
+		// explain the base network/DNS/DPI state instead of failing with a raw
+		// engine error. Core/exit checks remain informational.
+		report, _ := diagnostics.RunDiagnostics(ctx, diagnostics.NewLiveProber())
+		b, _ := json.Marshal(report)
+		return string(b)
 	}
-	b, _ := json.Marshal(o.RunSmartDiagnostics(context.Background()))
+	b, _ := json.Marshal(o.RunSmartDiagnostics(ctx))
+	return string(b)
+}
+
+// AutoHealDiagnostics runs diagnostics, applies safe automatic repairs, and
+// verifies the exit IP. Exposed to Flutter through the same JSON bridge.
+func AutoHealDiagnostics() string {
+	mu.Lock()
+	o := orch
+	mu.Unlock()
+	if o == nil {
+		return `{"error":"برای رفع خودکار، ابتدا اتصال VPN را برقرار کنید."}`
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	b, _ := json.Marshal(o.AutoHealDiagnostics(ctx))
 	return string(b)
 }
 

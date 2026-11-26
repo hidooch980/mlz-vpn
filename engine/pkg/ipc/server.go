@@ -41,6 +41,7 @@ func NewServer(orch *orchestrator.Orchestrator, bearerToken string, onShutdown f
 	mux.HandleFunc("/v1/disconnect", s.auth(s.handleDisconnect))
 	mux.HandleFunc("/v1/test-ip", s.auth(s.handleTestIP))
 	mux.HandleFunc("/v1/diagnostics", s.auth(s.handleDiagnostics))
+	mux.HandleFunc("/v1/diagnostics/heal", s.auth(s.handleAutoHealDiagnostics))
 	mux.HandleFunc("/v1/lan", s.auth(s.handleLAN))
 	mux.HandleFunc("/v1/sync", s.auth(s.handleSync))
 	mux.HandleFunc("/v1/updates", s.auth(s.handleCheckUpdate))
@@ -157,6 +158,21 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report := s.orch.RunSmartDiagnostics(r.Context())
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) handleAutoHealDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TunnelMode model.TunnelMode `json:"tunnel_mode"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	report := s.orch.AutoHealDiagnostics(r.Context(), req.TunnelMode)
 	writeJSON(w, http.StatusOK, report)
 }
 

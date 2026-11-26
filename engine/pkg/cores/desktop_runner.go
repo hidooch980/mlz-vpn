@@ -59,7 +59,13 @@ type coreProcess struct {
 }
 
 func startCoreProcess(ctx context.Context, bin string, args []string) (*coreProcess, error) {
-	cmd := exec.CommandContext(ctx, bin, args...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// The core must outlive the IPC request that started it. Binding it to the
+	// HTTP request context killed sing-box/xray as soon as the request returned,
+	// leaving the UI "connected" with no listening proxy.
+	cmd := exec.Command(bin, args...)
 	p := &coreProcess{cmd: cmd, done: make(chan struct{})}
 	cmd.Stdout = &p.log
 	cmd.Stderr = &p.log

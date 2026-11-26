@@ -53,6 +53,14 @@ class AndroidEngineBridge implements EngineBridge {
   }
 
   @override
+  Future<DiagnosticsReportModel> autoHealDiagnostics({
+    required TunnelModeOption tunnelMode,
+  }) async {
+    final res = await _invokeJson('autoHealDiagnostics');
+    return DiagnosticsReportModel.fromJson(res);
+  }
+
+  @override
   Future<LanShareModel> toggleLanShare(
       {required bool enabled, required bool usePin}) async {
     final res =

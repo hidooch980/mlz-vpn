@@ -6,7 +6,32 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
+
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("MLZ_CORE_HELPER") != "1" {
+		return
+	}
+	time.Sleep(3 * time.Second)
+	os.Exit(0)
+}
+
+func TestCoreProcessOutlivesStartContext(t *testing.T) {
+	t.Setenv("MLZ_CORE_HELPER", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	proc, err := startCoreProcess(ctx, os.Args[0], []string{"-test.run=TestHelperProcess"})
+	if err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+	cancel()
+	select {
+	case <-proc.done:
+		t.Fatal("core process was killed when the starting request context ended")
+	case <-time.After(500 * time.Millisecond):
+	}
+	proc.stop()
+}
 
 func TestDesktopRunnerMissingBinaryReportsClearError(t *testing.T) {
 	tmp := t.TempDir()

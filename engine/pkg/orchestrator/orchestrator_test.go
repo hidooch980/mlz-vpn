@@ -93,8 +93,22 @@ func TestOrchestratorConnectXrayChainAndDisconnect(t *testing.T) {
 	}
 
 	report := orch.RunSmartDiagnostics(context.Background())
-	if len(report.Steps) != 7 {
-		t.Fatalf("expected 7 diagnostic steps, got %d", len(report.Steps))
+	if len(report.Steps) != 9 {
+		t.Fatalf("expected 9 diagnostic steps, got %d", len(report.Steps))
 	}
 	_ = diagnostics.HealingAction{}
+}
+
+func TestResilientEngineModeOnAndroid(t *testing.T) {
+	android := New(Config{AndroidLibDir: "/data/lib"}, nil)
+	if got := android.resilientEngineMode(model.EngineModeXrayAntiDPI); got != model.EngineModeAuto {
+		t.Fatalf("android must degrade Xray anti-DPI to auto, got %q", got)
+	}
+	desktop := New(Config{}, nil)
+	if got := desktop.resilientEngineMode(model.EngineModeXrayAntiDPI); got != model.EngineModeXrayAntiDPI {
+		t.Fatalf("desktop should keep Xray anti-DPI, got %q", got)
+	}
+	if got := desktop.resilientEngineMode(""); got != model.EngineModeAuto {
+		t.Fatalf("empty mode should become auto, got %q", got)
+	}
 }

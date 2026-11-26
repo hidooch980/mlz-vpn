@@ -131,18 +131,27 @@ type TrafficStats struct {
 	RealDelayMS   int   `json:"real_delay_ms"`
 }
 
-// DiagnosticStep represents one automated check in the 7-step diagnostic pipeline.
+// DiagnosticStep represents one automated check in the smart diagnostic pipeline.
 type DiagnosticStep struct {
 	ID          string `json:"id"`
 	TitleFA     string `json:"title_fa"`
-	Status      string `json:"status"` // pending | ok | fixed | failed
+	Status      string `json:"status"`             // pending | ok | info | fixed | failed
+	Severity    string `json:"severity,omitempty"` // ok | info | warning | critical
 	DetailFA    string `json:"detail_fa"`
 	AutoApplied bool   `json:"auto_applied"`
+	CanAutoFix  bool   `json:"can_auto_fix,omitempty"`
+	FixLabelFA  string `json:"fix_label_fa,omitempty"`
 }
 
 // DiagnosticsReport summarizes the full smart diagnostic run and remediation.
 type DiagnosticsReport struct {
-	Timestamp int64            `json:"timestamp"`
-	SummaryFA string           `json:"summary_fa"`
-	Steps     []DiagnosticStep `json:"steps"`
+	Timestamp     int64            `json:"timestamp"`
+	SummaryFA     string           `json:"summary_fa"`
+	HeadlineFA    string           `json:"headline_fa,omitempty"`
+	HealthScore   int              `json:"health_score"`
+	HealthLabelFA string           `json:"health_label_fa,omitempty"`
+	AutoHealed    bool             `json:"auto_healed"`
+	AutoFixCount  int              `json:"auto_fix_count"`
+	NeedsAction   bool             `json:"needs_action"`
+	Steps         []DiagnosticStep `json:"steps"`
 }

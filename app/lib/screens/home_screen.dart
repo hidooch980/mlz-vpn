@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../models/vpn_models.dart';
+import 'diagnostics_screen.dart';
 import '../state/vpn_controller.dart';
 import '../theme/mlz_theme.dart';
 import '../widgets/clickable_ip_card.dart';
@@ -40,13 +41,33 @@ class HomeScreen extends ConsumerWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      state.errorMessageFA!,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          color: c.error,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(
+                          state.errorMessageFA!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: c.error,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 2),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            foregroundColor: c.brandPrimary,
+                          ),
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const DiagnosticsScreen()),
+                          ),
+                          icon: const Icon(Icons.health_and_safety_outlined,
+                              size: 15),
+                          label: const Text('عیب‌یابی و رفع خودکار',
+                              style: TextStyle(fontSize: 11)),
+                        ),
+                      ],
                     ),
                   ),
                   IconButton(
@@ -183,7 +204,8 @@ class _UpdateAnnouncement extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.download_rounded, size: 17),
-                  label: Text(downloading ? 'در حال دانلود...' : 'دریافت و نصب'),
+                  label:
+                      Text(downloading ? 'در حال دانلود...' : 'دریافت و نصب'),
                 ),
               ],
             ),
