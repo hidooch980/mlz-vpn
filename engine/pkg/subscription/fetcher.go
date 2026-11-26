@@ -74,7 +74,6 @@ func (f *Fetcher) CachedNodes() ([]model.Node, time.Time) {
 func (f *Fetcher) SyncIfDue(ctx context.Context, force bool, batterySaver bool, localHTTPProxyPort int) (updated bool, err error) {
 	f.mu.RLock()
 	last := f.lastFetched
-	etag := f.lastETag
 	f.mu.RUnlock()
 
 	if !force && !ShouldRefresh(last, time.Now(), batterySaver) {
@@ -89,22 +88,10 @@ func (f *Fetcher) SyncIfDue(ctx context.Context, force bool, batterySaver bool, 
 			lastErr = reqErr
 			continue
 		}
-		if etag != "" {
-			req.Header.Set("If-None-Match", etag)
-		}
-
 		resp, doErr := client.Do(req)
 		if doErr != nil {
 			lastErr = doErr
 			continue
-		}
-
-		if resp.StatusCode == http.StatusNotModified {
-			resp.Body.Close()
-			f.mu.Lock()
-			f.lastFetched = time.Now()
-			f.mu.Unlock()
-			return false, nil
 		}
 
 		if resp.StatusCode != http.StatusOK {

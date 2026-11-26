@@ -39,8 +39,8 @@ func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, p
 	runner := newAndroidRunner(cacheDir, tunFD, protector, networkJSON)
 	activeRunner = runner
 	orch = orchestrator.New(orchestrator.Config{
-		CurrentBuild:    102,
-		CurrentVersion:  "1.0.2",
+		CurrentBuild:    103,
+		CurrentVersion:  "1.0.3",
 		UpdatePublicKey: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 		CacheDir:        cacheDir,
 		RuleSetDir:      ruleSetDir,
@@ -51,8 +51,8 @@ func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, p
 			PublicKeyBase64: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 			EmbeddedSeeds:   subscription.EmbeddedSeeds(),
 			FeedURLs: []string{
-				"https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
 				"https://raw.githubusercontent.com/hidooch980/mlz-vpn/main/feeds/feed.v1.json",
+				"https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
 			},
 		},
 		ManifestURLs: []string{

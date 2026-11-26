@@ -25,8 +25,8 @@ import (
 
 // version and buildNumber are overridden at build time with -ldflags -X.
 var (
-	version     = "1.0.2"
-	buildNumber = "102"
+	version     = "1.0.3"
+	buildNumber = "103"
 
 	// MLZ release signing public key (same Ed25519 identity as the signed feed).
 	updatePublicKey = "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8="
@@ -63,8 +63,8 @@ func main() {
 			PublicKeyBase64: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 			EmbeddedSeeds:   subscription.EmbeddedSeeds(),
 			FeedURLs: []string{
-				"https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
 				"https://raw.githubusercontent.com/hidooch980/mlz-vpn/main/feeds/feed.v1.json",
+				"https://cdn.jsdelivr.net/gh/hidooch980/mlz-vpn@main/feeds/feed.v1.json",
 			},
 		},
 		ManifestURLs: []string{

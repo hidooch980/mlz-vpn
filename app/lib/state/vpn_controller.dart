@@ -181,7 +181,7 @@ class VpnController extends StateNotifier<MlzAppState> {
       final prefs = await SharedPreferences.getInstance();
       final last = prefs.getInt('last_update_check_ms') ?? 0;
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - last < const Duration(hours: 1).inMilliseconds) return;
+      if (now - last < const Duration(minutes: 10).inMilliseconds) return;
     } catch (_) {}
     await checkForUpdates(silent: true);
   }
@@ -405,10 +405,22 @@ class VpnController extends StateNotifier<MlzAppState> {
     state = state.copyWith(availableUpdate: null);
   }
 
-  String _cleanError(Object error) => error
-      .toString()
-      .replaceFirst('Exception: ', '')
-      .replaceFirst('PlatformException(', '');
+  String _cleanError(Object error) {
+    final raw = error
+        .toString()
+        .replaceFirst('Exception: ', '')
+        .replaceFirst('PlatformException(', '');
+    if (raw.contains('end-to-end health check')) {
+      return 'هیچ سروری پاسخ سالم نداد؛ چند لحظه بعد دوباره تلاش کنید.';
+    }
+    if (raw.contains('clash delay probe HTTP')) {
+      return 'سرورهای فعلی موقتاً پاسخ نمی‌دهند؛ دوباره تلاش کنید.';
+    }
+    if (raw.contains('no healthy')) {
+      return 'سرور سالمی پیدا نشد؛ دوباره تلاش کنید.';
+    }
+    return raw;
+  }
 
   Future<void> downloadAndInstallUpdate() async {
     final upd = state.availableUpdate;
