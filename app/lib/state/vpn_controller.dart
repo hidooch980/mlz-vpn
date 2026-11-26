@@ -208,7 +208,7 @@ class VpnController extends StateNotifier<MlzAppState> {
     } catch (e) {
       state = state.copyWith(
         connState: VpnConnectionState.error,
-        errorMessageFA: e.toString().replaceFirst('Exception: ', ''),
+        errorMessageFA: _cleanError(e),
       );
     }
   }
@@ -285,8 +285,7 @@ class VpnController extends StateNotifier<MlzAppState> {
     } catch (e) {
       state = state.copyWith(
         ipTesting: false,
-        errorMessageFA:
-            'تست آی‌پی ناموفق بود: ${e.toString().replaceFirst('Exception: ', '')}',
+        errorMessageFA: 'تست آی‌پی ناموفق بود: ${_cleanError(e)}',
       );
     }
   }
