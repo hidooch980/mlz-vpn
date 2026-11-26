@@ -247,7 +247,10 @@ class VpnController extends StateNotifier<MlzAppState> {
     final stats = (snap['stats'] as Map<String, dynamic>?) ?? const {};
     final lanRaw = snap['lan'] as Map<String, dynamic>?;
     final ipRaw = snap['last_ip_test'] as Map<String, dynamic>?;
-    final serverError = (snap['error_message_fa'] as String?)?.trim();
+    final rawServerError = (snap['error_message_fa'] as String?)?.trim();
+    final serverError = (rawServerError == null || rawServerError.isEmpty)
+        ? rawServerError
+        : _cleanError(rawServerError);
     final keepError = st == VpnConnectionState.error &&
         (serverError == null || serverError.isEmpty);
 

@@ -39,8 +39,8 @@ func Init(cacheDir, ruleSetDir, nativeLibDir, networkJSON string, tunFD int32, p
 	runner := newAndroidRunner(cacheDir, tunFD, protector, networkJSON)
 	activeRunner = runner
 	orch = orchestrator.New(orchestrator.Config{
-		CurrentBuild:    104,
-		CurrentVersion:  "1.0.4",
+		CurrentBuild:    105,
+		CurrentVersion:  "1.0.5",
 		UpdatePublicKey: "6ZcGl3tK1+MmN/ix3C14i//iC8kyBWt7vagvP7NfWm8=",
 		CacheDir:        cacheDir,
 		RuleSetDir:      ruleSetDir,
@@ -127,7 +127,9 @@ func TestIPHealth() string {
 	if o == nil {
 		return `{"error":"engine not initialized"}`
 	}
-	res, err := o.TestIPHealth(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := o.TestIPHealth(ctx)
 	if err != nil {
 		b, _ := json.Marshal(map[string]string{"error": err.Error()})
 		return string(b)
